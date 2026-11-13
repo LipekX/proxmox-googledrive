@@ -1,0 +1,19 @@
+Source: pve-storage-gdrive
+Section: admin
+Priority: optional
+Maintainer: Proxmox GDrive Contributors <maintainers@lipa.run>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/lipa/pve-storage-gdrive
+
+Package: pve-storage-gdrive
+Architecture: all
+Depends: python3 (>= 3.11), rclone, fuse3, openssl, libjson-perl, libwww-perl, pve-manager (>= 8.0)
+Description: Google Drive storage backend plugin for Proxmox VE
+ Integrates Google Drive (My Drive and Shared Drives) as a native storage
+ backend in Proxmox VE 8.x and 9.x for backups (vzdump), ISO images, and
+ container templates.
+ .
+ Includes the pve-gdrived VFS/OAuth management daemon, Proxmox storage and
+ REST API Perl plugins, Web UI integration with Easy Google Sign-In, and a
+ synchronous vzdump backup verification hook.

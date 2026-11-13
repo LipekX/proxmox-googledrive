@@ -1,0 +1,51 @@
+#!/bin/bash
+set -euo pipefail
+
+OVERLAY_HOOK="/usr/libexec/pve-gdrive/overlay-hook.sh"
+CACHE_DIR="/var/cache/pve-gdrive"
+SERVICE="pve-gdrived.service"
+PVE_SERVICES=("pvedaemon" "pveproxy" "pvestatd")
+
+systemd_running() {
+    command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+restart_pve_services() {
+    local svc
+    for svc in "${PVE_SERVICES[@]}"; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl restart "$svc" || true
+        fi
+    done
+}
+
+case "${1:-}" in
+    configure|triggered)
+        install -d -m 0700 -o root -g root "$CACHE_DIR"
+
+        if [[ -x "$OVERLAY_HOOK" ]]; then
+            "$OVERLAY_HOOK" --install
+        fi
+
+        if systemd_running; then
+            systemctl daemon-reload
+            if [[ "${1}" == "configure" ]]; then
+                systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+                systemctl restart "$SERVICE"
+            elif ! systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+                systemctl start "$SERVICE" || true
+            fi
+            restart_pve_services
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

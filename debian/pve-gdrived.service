@@ -1,0 +1,18 @@
+[Unit]
+Description=Proxmox VE Google Drive Storage Daemon
+Documentation=https://github.com/lipa/pve-storage-gdrive
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/pve-gdrive/pve-gdrived
+RuntimeDirectory=pve-gdrive
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

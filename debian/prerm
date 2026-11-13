@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+
+OVERLAY_HOOK="/usr/libexec/pve-gdrive/overlay-hook.sh"
+SERVICE="pve-gdrived.service"
+PVE_SERVICES=("pvedaemon" "pveproxy" "pvestatd")
+
+systemd_running() {
+    command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+restart_pve_services() {
+    local svc
+    for svc in "${PVE_SERVICES[@]}"; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl restart "$svc" || true
+        fi
+    done
+}
+
+case "${1:-}" in
+    remove|purge)
+        if [[ -x "$OVERLAY_HOOK" ]]; then
+            "$OVERLAY_HOOK" --remove || true
+        fi
+
+        if systemd_running; then
+            if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+                systemctl stop "$SERVICE" || true
+            fi
+            systemctl disable "$SERVICE" >/dev/null 2>&1 || true
+            restart_pve_services
+        fi
+        ;;
+    upgrade|deconfigure|failed-upgrade)
+        ;;
+    *)
+        echo "prerm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,5 @@
+pve-storage-gdrive (0.1.0-1) bookworm; urgency=medium
+
+  * Initial release of pve-storage-gdrive for Proxmox VE 8.x and 9.x.
+
+ -- Proxmox GDrive Contributors <maintainers@lipa.run>  Fri, 13 Nov 2026 15:00:00 +0000

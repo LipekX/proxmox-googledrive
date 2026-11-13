@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+
+PKGDIR := $(CURDIR)/debian/pve-storage-gdrive
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	install -d -m 0755 $(PKGDIR)/usr/libexec/pve-gdrive
+	install -d -m 0755 $(PKGDIR)/usr/libexec/pve-gdrive/pve_gdrive
+	install -d -m 0755 $(PKGDIR)/usr/bin
+	install -d -m 0755 $(PKGDIR)/usr/share/perl5/PVE/Storage/Custom
+	install -d -m 0755 $(PKGDIR)/usr/share/perl5/PVE/API2
+	install -d -m 0755 $(PKGDIR)/usr/share/pve-manager/js
+	install -d -m 0755 $(PKGDIR)/lib/systemd/system
+
+	install -m 0755 daemon/pve-gdrived $(PKGDIR)/usr/libexec/pve-gdrive/pve-gdrived
+	install -m 0644 daemon/pve_gdrive/*.py $(PKGDIR)/usr/libexec/pve-gdrive/pve_gdrive/
+	install -m 0755 daemon/pve-gdrive $(PKGDIR)/usr/bin/pve-gdrive
+
+	install -m 0644 perl/PVE/Storage/Custom/GDrivePlugin.pm $(PKGDIR)/usr/share/perl5/PVE/Storage/Custom/GDrivePlugin.pm
+	install -m 0644 perl/PVE/API2/GDrive.pm $(PKGDIR)/usr/share/perl5/PVE/API2/GDrive.pm
+
+	install -m 0755 scripts/vzdump-gdrive-hook.pl $(PKGDIR)/usr/libexec/pve-gdrive/vzdump-gdrive-hook.pl
+
+	install -m 0644 ui/pve-gdrive.js $(PKGDIR)/usr/share/pve-manager/js/pve-gdrive.js
+	install -m 0644 ui/gdrive-oauth-callback.html $(PKGDIR)/usr/share/pve-manager/gdrive-oauth-callback.html
+	install -m 0755 ui/overlay-hook.sh $(PKGDIR)/usr/libexec/pve-gdrive/overlay-hook.sh
+
+	install -m 0644 debian/pve-gdrived.service $(PKGDIR)/lib/systemd/system/pve-gdrived.service
+
+override_dh_auto_test:
+	# Tests require local mock harnesses; run explicitly via 'make test'.

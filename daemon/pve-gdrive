@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""CLI helper for pve-gdrived (status, accounts, queue, wait-upload)."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.parse
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+for _candidate in (_HERE, "/usr/libexec/pve-gdrive"):
+    if os.path.isdir(os.path.join(_candidate, "pve_gdrive")) and _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
+
+from pve_gdrive.config import DEFAULT_SOCK_PATH  # noqa: E402
+from pve_gdrive.ipc import ipc_request  # noqa: E402
+
+
+def _fmt_bytes(num: int) -> str:
+    val = float(num)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(val) < 1024.0 or unit == "TiB":
+            return f"{val:.1f} {unit}" if unit != "B" else f"{int(val)} B"
+        val /= 1024.0
+    return f"{num} B"
+
+
+def _cmd_status(sock: str, args: argparse.Namespace) -> int:
+    if args.storeid:
+        code, data = ipc_request(
+            sock,
+            "GET",
+            f"/v1/storage/{urllib.parse.quote(args.storeid, safe='')}/status",
+        )
+    else:
+        code, data = ipc_request(sock, "GET", "/v1/health")
+    if args.json:
+        print(json.dumps(data, indent=2))
+    elif args.storeid:
+        if code >= 400:
+            print(f"Error: {data.get('error', data)}", file=sys.stderr)
+            return 1
+        print(
+            f"storeid={args.storeid} active={data.get('active')} "
+            f"mounted={data.get('mounted')} "
+            f"used={_fmt_bytes(int(data.get('used', 0)))} "
+            f"avail={_fmt_bytes(int(data.get('avail', 0)))} "
+            f"cache={_fmt_bytes(int(data.get('cache_used', 0)))}/"
+            f"{_fmt_bytes(int(data.get('cache_max', 0)))}"
+        )
+    else:
+        print(f"ok={data.get('ok')} version={data.get('version')} pid={data.get('pid')}")
+    return 0 if code < 400 else 1
+
+
+def _cmd_accounts(sock: str, args: argparse.Namespace) -> int:
+    code, data = ipc_request(sock, "GET", "/v1/accounts")
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0 if code < 400 else 1
+    if code >= 400:
+        print(f"Error: {data.get('error', data)}", file=sys.stderr)
+        return 1
+    accounts = data.get("accounts") or []
+    if not accounts:
+        print("No Google Drive accounts configured.")
+        return 0
+    for acct in accounts:
+        quota = acct.get("quota") or {}
+        q_str = (
+            "unlimited"
+            if quota.get("unlimited")
+            else f"{_fmt_bytes(int(quota.get('usage', 0)))}/{_fmt_bytes(int(quota.get('limit', 0)))}"
+            if quota
+            else "unknown"
+        )
+        print(
+            f"{acct['id']}\temail={acct.get('email', '')}\tmode={acct.get('mode', '')}"
+            f"\tscope={acct.get('scope', '')}\tquota={q_str}"
+        )
+    return 0
+
+
+def _cmd_queue(sock: str, args: argparse.Namespace) -> int:
+    code, data = ipc_request(sock, "GET", "/v1/queue")
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0 if code < 400 else 1
+    if code >= 400:
+        print(f"Error: {data.get('error', data)}", file=sys.stderr)
+        return 1
+    uploads = data.get("uploads") or []
+    if not uploads:
+        print("Upload queue is empty.")
+        return 0
+    for item in uploads:
+        print(
+            f"[{item.get('storeid')}] {item.get('name')} "
+            f"{item.get('percentage', 0)}% "
+            f"({item.get('bytes', 0)}/{item.get('size', 0)} bytes) "
+            f"uploading={item.get('uploading')}"
+        )
+    return 0
+
+
+def _cmd_wait_upload(sock: str, args: argparse.Namespace) -> int:
+    code, data = ipc_request(
+        sock,
+        "POST",
+        "/v1/uploads/wait",
+        body={
+            "storeid": args.storeid,
+            "path": args.path,
+            "timeout_sec": args.timeout,
+        },
+        timeout=float(args.timeout) + 5.0,
+    )
+    if args.json:
+        print(json.dumps(data, indent=2))
+    elif code >= 400:
+        print(f"Error: {data.get('error', data)}", file=sys.stderr)
+    else:
+        print(f"Uploaded: {data.get('storeid')}:{data.get('path')}")
+    return 0 if code < 400 else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="pve-gdrive",
+        description="CLI helper for pve-gdrived Google Drive storage daemon",
+    )
+    parser.add_argument(
+        "--sock",
+        default=os.environ.get("PVE_GDRIVE_SOCK", DEFAULT_SOCK_PATH),
+        help="Path to pve-gdrived Unix socket",
+    )
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_status = sub.add_parser("status", help="Show daemon health or storage status")
+    p_status.add_argument("storeid", nargs="?", help="Optional storage ID")
+
+    sub.add_parser("accounts", help="List configured Google accounts")
+    sub.add_parser("queue", help="Show active upload queue")
+
+    p_wait = sub.add_parser("wait-upload", help="Wait for an upload to finish")
+    p_wait.add_argument("storeid", help="Proxmox storage ID")
+    p_wait.add_argument("path", help="File path (absolute or storage-relative)")
+    p_wait.add_argument("--timeout", type=float, default=3600.0, help="Timeout in seconds")
+
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "status":
+            return _cmd_status(args.sock, args)
+        if args.command == "accounts":
+            return _cmd_accounts(args.sock, args)
+        if args.command == "queue":
+            return _cmd_queue(args.sock, args)
+        if args.command == "wait-upload":
+            return _cmd_wait_upload(args.sock, args)
+    except OSError as exc:
+        print(f"Failed to connect to pve-gdrived socket {args.sock}: {exc}", file=sys.stderr)
+        return 1
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

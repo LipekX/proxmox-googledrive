@@ -1,0 +1,19 @@
+# Cloudflare Worker configuration for pve-storage-gdrive OAuth2 relay
+# License: AGPL-3.0-or-later
+
+name = "pve-storage-gdrive-relay"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+workers_dev = true
+
+# Never enable request/response body logging or KV persistence for OAuth callbacks.
+[observability]
+enabled = false
+
+[vars]
+# Override with your deployed worker callback URL if using a custom domain.
+REDIRECT_URI = "https://auth.pve-gdrive.org/oauth/callback"
+
+# Required secrets (set via `wrangler secret put` — NEVER commit secrets here):
+#   wrangler secret put GOOGLE_CLIENT_ID
+#   wrangler secret put GOOGLE_CLIENT_SECRET
