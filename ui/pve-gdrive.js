@@ -135,6 +135,11 @@
         return;
     }
 
+    var runWhenReady =
+        typeof Ext.onReady === 'function'
+            ? function (fn) { Ext.onReady(fn); }
+            : function (fn) { fn(); };
+
     /**
      * Google Service Account Configuration Modal (never expires, no OAuth re-login).
      */
@@ -265,12 +270,21 @@
     /**
      * Google Drive Storage Add/Edit Input Panel.
      */
-    Ext.define('PVE.storage.GDriveInputPanel', {
-        extend:
-            Proxmox && Proxmox.panel && Proxmox.panel.InputPanel
+    runWhenReady(function () {
+        var dirSuper =
+            PVE.storage &&
+            PVE.storage.DirInputPanel &&
+            PVE.storage.DirInputPanel.superclass &&
+            PVE.storage.DirInputPanel.superclass.$className;
+        var baseInputClass =
+            dirSuper ||
+            (Proxmox && Proxmox.panel && Proxmox.panel.InputPanel
                 ? 'Proxmox.panel.InputPanel'
-                : 'PVE.panel.StorageBase',
-        alias: 'widget.pveGDriveInputPanel',
+                : 'PVE.panel.StorageBase');
+
+        Ext.define('PVE.storage.GDriveInputPanel', {
+            extend: baseInputClass,
+            alias: 'widget.pveGDriveInputPanel',
 
         onlineHelp: 'chapter_storage',
 
@@ -508,7 +522,13 @@
             me._loadDrives = loadDrives;
             me._toggleCryptFields = toggleCryptFields;
 
-            me.callParent();
+            if (me.superclass) {
+                if (typeof me.superclass.initComponent === 'function') {
+                    me.superclass.initComponent.call(me);
+                }
+            } else if (typeof me.callParent === 'function') {
+                me.callParent();
+            }
             loadAccounts();
         },
 
@@ -529,7 +549,13 @@
                     copy.encrypt === 1 || copy.encrypt === '1' || copy.encrypt === true
                 );
             }
-            return me.callParent([copy]);
+            if (me.superclass) {
+                if (typeof me.superclass.setValues === 'function') {
+                    return me.superclass.setValues.call(me, copy);
+                }
+                return copy;
+            }
+            return typeof me.callParent === 'function' ? me.callParent([copy]) : copy;
         },
 
         onGetValues: function (values) {
@@ -548,8 +574,15 @@
                 delete out.drive_id;
             }
 
-            return me.callParent([out]);
+            if (me.superclass) {
+                if (typeof me.superclass.onGetValues === 'function') {
+                    return me.superclass.onGetValues.call(me, out);
+                }
+                return out;
+            }
+            return typeof me.callParent === 'function' ? me.callParent([out]) : out;
         },
+    });
     });
 
     /**
@@ -830,11 +863,13 @@
         });
     };
 
-    try {
-        PVE.gdrive.installContentViewHooks();
-    } catch (err) {
-        if (global.console && typeof global.console.error === 'function') {
-            global.console.error('pve-gdrive UI hook warning:', err);
+    runWhenReady(function () {
+        try {
+            PVE.gdrive.installContentViewHooks();
+        } catch (err) {
+            if (global.console && typeof global.console.error === 'function') {
+                global.console.error('pve-gdrive UI hook warning:', err);
+            }
         }
-    }
+    });
 })(typeof window !== 'undefined' ? window : globalThis);
