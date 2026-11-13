@@ -12,6 +12,7 @@ test:
 	node --check ui/pve-gdrive.js
 	node --test tests/test_webui.mjs
 	bash -n ui/overlay-hook.sh
+	bash -n local_install.sh
 	bash -n scripts/install.sh
 	bash -n debian/postinst
 	bash -n debian/prerm

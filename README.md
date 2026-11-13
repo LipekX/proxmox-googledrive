@@ -30,6 +30,18 @@ bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)" -- --
 bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)" -- --uninstall
 ```
 
+### Local Install (from `git clone`)
+
+If the repository is private or you want to build and install directly from a local checkout:
+
+```bash
+git clone https://git.lipa.run/lipa/proxmox-gdrive-storage.git
+cd proxmox-gdrive-storage
+sudo ./local_install.sh
+```
+
+Options: `--yes` (non-interactive), `--skip-build` (use existing `.deb` in `dist/`), `--uninstall`.
+
 ---
 
 ## Easy Google Login Modes
