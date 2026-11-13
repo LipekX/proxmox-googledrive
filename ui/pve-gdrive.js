@@ -263,7 +263,13 @@
                 },
             ];
 
-            me.callParent();
+            if (me.superclass) {
+                if (typeof me.superclass.initComponent === 'function') {
+                    me.superclass.initComponent.call(me);
+                }
+            } else if (typeof me.callParent === 'function') {
+                me.callParent();
+            }
         },
     });
 
@@ -728,7 +734,13 @@
                 },
             ];
 
-            me.callParent();
+            if (me.superclass) {
+                if (typeof me.superclass.initComponent === 'function') {
+                    me.superclass.initComponent.call(me);
+                }
+            } else if (typeof me.callParent === 'function') {
+                me.callParent();
+            }
         },
     });
 
