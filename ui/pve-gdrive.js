@@ -266,7 +266,10 @@
      * Google Drive Storage Add/Edit Input Panel.
      */
     Ext.define('PVE.storage.GDriveInputPanel', {
-        extend: 'PVE.panel.StorageBase',
+        extend:
+            Proxmox && Proxmox.panel && Proxmox.panel.InputPanel
+                ? 'Proxmox.panel.InputPanel'
+                : 'PVE.panel.StorageBase',
         alias: 'widget.pveGDriveInputPanel',
 
         onlineHelp: 'chapter_storage',
