@@ -86,11 +86,6 @@ def collect_install_manifest(repo_root: Path) -> list[tuple[Path, str, int]]:
             0o755,
         ),
         ("ui/pve-gdrive.js", "usr/share/pve-manager/js/pve-gdrive.js", 0o644),
-        (
-            "ui/gdrive-oauth-callback.html",
-            "usr/share/pve-manager/gdrive-oauth-callback.html",
-            0o644,
-        ),
         ("ui/overlay-hook.sh", "usr/libexec/pve-gdrive/overlay-hook.sh", 0o755),
         (
             "debian/pve-gdrived.service",

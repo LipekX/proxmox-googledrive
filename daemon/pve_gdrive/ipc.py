@@ -185,43 +185,6 @@ class IPCRequestHandler(BaseHTTPRequestHandler):
                 enriched.append(item)
             return 200, {"accounts": enriched}
 
-        # GET /v1/relay/config
-        if method == "GET" and sub == ["relay", "config"]:
-            return 200, app.oauth.get_relay_config()
-
-        # POST /v1/relay/config
-        if method == "POST" and sub == ["relay", "config"]:
-            res = app.oauth.save_relay_config(
-                enabled=bool(body.get("enabled", False)),
-                client_id=body.get("client_id"),
-                client_secret=body.get("client_secret"),
-                redirect_uri=body.get("redirect_uri"),
-                scope=body.get("scope") or "drive.file",
-            )
-            return 200, res
-
-        # POST /v1/oauth/start
-        if method == "POST" and sub == ["oauth", "start"]:
-            res = app.oauth.start_oauth(
-                mode=str(body.get("mode") or "relay"),
-                client_id=body.get("client_id"),
-                client_secret=body.get("client_secret"),
-                scope=body.get("scope"),
-                redirect_uri=body.get("redirect_uri"),
-                ui_origin=body.get("ui_origin"),
-            )
-            return 200, res
-
-        # POST /v1/oauth/finish
-        if method == "POST" and sub == ["oauth", "finish"]:
-            account = app.oauth.finish_oauth(
-                state=str(body.get("state") or ""),
-                code=body.get("code"),
-                tokens_json=body.get("tokens_json"),
-                account_id=body.get("account_id"),
-            )
-            return 200, {"account": account}
-
         # POST /v1/accounts/service-account
         if method == "POST" and sub == ["accounts", "service-account"]:
             account = app.oauth.add_service_account(

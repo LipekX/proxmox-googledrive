@@ -199,9 +199,8 @@ do_install() {
     log_info "Local installation complete!"
     log_info "Next steps:"
     echo "  1. Open Proxmox Web UI -> Datacenter -> Storage -> Add -> Google Drive."
-    echo "  2. Click 'Sign in with Google' and open the 'Host OAuth Relay in Proxmox' tab"
-    echo "     to configure your own Google OAuth Client ID/Secret (no public relay needed)."
-    echo "     Callback URL: https://<your-proxmox-host>:8006/pve2/gdrive-oauth-callback.html"
+    echo "  2. Click 'Configure Service Account' and upload or paste your Google Service Account JSON key."
+    echo "     (Share your Google Shared Drive or Drive folder with the Service Account email.)"
     echo "  3. CLI status check: pve-gdrive status"
 }
 

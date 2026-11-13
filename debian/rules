@@ -24,7 +24,6 @@ override_dh_auto_install:
 	install -m 0755 scripts/vzdump-gdrive-hook.pl $(PKGDIR)/usr/libexec/pve-gdrive/vzdump-gdrive-hook.pl
 
 	install -m 0644 ui/pve-gdrive.js $(PKGDIR)/usr/share/pve-manager/js/pve-gdrive.js
-	install -m 0644 ui/gdrive-oauth-callback.html $(PKGDIR)/usr/share/pve-manager/gdrive-oauth-callback.html
 	install -m 0755 ui/overlay-hook.sh $(PKGDIR)/usr/libexec/pve-gdrive/overlay-hook.sh
 
 	install -m 0644 debian/pve-gdrived.service $(PKGDIR)/lib/systemd/system/pve-gdrived.service

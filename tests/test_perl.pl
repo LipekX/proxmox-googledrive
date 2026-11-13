@@ -457,42 +457,10 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
     PVE::RPCEnvironment->set_mock_permissions({ '*' => 1 }, 'root@pam');
 
     my $idx = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'GET', '');
-    is(scalar(@$idx), 5, 'GET "" index returns 5 subdirs');
+    is(scalar(@$idx), 3, 'GET "" index returns 3 subdirs');
 
     my $accts = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'GET', 'accounts');
     is($accts->{accounts}[0]{email}, 'user@example.com', 'GET accounts returns daemon accounts');
-
-    my $rcfg = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'GET', 'relay/config');
-    is($rcfg->{client_id}, 'pve-self-cid', 'GET relay/config returns self-hosted relay config');
-    ok(!exists $rcfg->{client_secret}, 'GET relay/config never exposes client_secret');
-
-    clear_requests();
-    my $rsave = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'relay/config', {
-        enabled      => 1,
-        client_id    => 'new-cid',
-        client_secret => 'new-sec',
-        redirect_uri => 'https://pve.example.com:8006/pve2/gdrive-oauth-callback.html',
-        scope        => 'drive',
-    });
-    is($rsave->{client_id}, 'new-cid', 'POST relay/config updates relay settings');
-    my $rreqs = read_requests();
-    is($rreqs->[0]{path}, '/v1/relay/config', 'POST relay/config hits /v1/relay/config');
-
-    clear_requests();
-    my $oauth = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/start', {
-        mode      => 'pve_self',
-        ui_origin => 'https://pve.example.com:8006',
-    });
-    is($oauth->{state}, 'st-abc123', 'POST oauth/start returns state');
-    my $reqs = read_requests();
-    is($reqs->[0]{body}{mode}, 'pve_self', 'POST oauth/start forwards pve_self mode');
-    is($reqs->[0]{body}{ui_origin}, 'https://pve.example.com:8006', 'POST oauth/start forwards ui_origin');
-
-    my $fin = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/finish', {
-        state      => 'st-abc123',
-        tokens_json => '{"access_token":"x"}',
-    });
-    is($fin->{account}{email}, 'user@example.com', 'POST oauth/finish returns created account');
 
     my $sa = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'accounts/service-account', {
         account_id           => 'sa-backup',
@@ -514,7 +482,7 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
         target_type => 'iso',
     });
     is($imp->{imported}[0]{file_id}, 'fid1', 'POST picker/import imports files');
-    $reqs = read_requests();
+    my $reqs = read_requests();
     is_deeply($reqs->[0]{body}{file_ids}, ['fid1', 'fid2'], 'POST picker/import parses comma-separated file_ids');
 
     my $del = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'DELETE', 'accounts/user@example.com');
@@ -522,14 +490,9 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
 
     # Schema validation errors
     eval {
-        PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/start', { mode => 'invalid' });
+        PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'accounts/service-account', {});
     };
-    like($@, qr/invalid value/i, 'JSONSchema rejects invalid oauth/start mode');
-
-    eval {
-        PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/finish', {});
-    };
-    like($@, qr/required/i, 'JSONSchema rejects oauth/finish missing required state');
+    like($@, qr/required/i, 'JSONSchema rejects accounts/service-account missing required service_account_json');
 
     # RBAC tests
     PVE::RPCEnvironment->set_mock_permissions({ '/storage:Datastore.Audit' => 1 }, 'auditor@pve');
@@ -537,22 +500,19 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
     is($audit_accts->{accounts}[0]{id}, 'user@example.com', 'RBAC allows Datastore.Audit on GET accounts');
 
     eval {
-        PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/start', { mode => 'relay' });
+        PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'accounts/service-account', {
+            service_account_json => '{"type":"service_account"}',
+        });
     };
-    like($@, qr/Permission check failed/, 'RBAC denies Datastore.Audit on POST oauth/start');
+    like($@, qr/Permission check failed/, 'RBAC denies Datastore.Audit on POST accounts/service-account');
 
     PVE::RPCEnvironment->set_mock_permissions({ '/storage:Datastore.Allocate' => 1 }, 'admin@pve');
-    my $alloc_oauth = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/start', { mode => 'relay' });
-    is($alloc_oauth->{state}, 'st-abc123', 'RBAC allows Datastore.Allocate on POST oauth/start');
-
-    eval {
-        PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'relay/config', { enabled => 1, client_id => 'x' });
-    };
-    like($@, qr/Permission check failed/, 'RBAC denies Datastore.Allocate-only user on POST relay/config');
+    my $alloc_sa = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'accounts/service-account', {
+        service_account_json => '{"type":"service_account"}',
+    });
+    is($alloc_sa->{account}{id}, 'sa-backup', 'RBAC allows Datastore.Allocate on POST accounts/service-account');
 
     PVE::RPCEnvironment->set_mock_permissions({ '/:Sys.Modify' => 1 }, 'sysadmin@pve');
-    my $sys_relay = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'relay/config', { enabled => 0 });
-    is($sys_relay->{enabled}, JSON::false, 'RBAC allows Sys.Modify on POST relay/config');
     my $sys_del = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'DELETE', 'accounts/user@example.com');
     ok(!defined $sys_del, 'RBAC allows Sys.Modify on DELETE accounts/{account}');
 }

@@ -38,82 +38,6 @@
      */
     var Utils = (PVE.gdrive.Utils = {
         /**
-         * Decode a base64 or JSON authorization payload copied from the OAuth relay.
-         * Returns `{ state, tokens }`.
-         * @param {string} rawInput
-         * @returns {{ state: string, tokens: Record<string, unknown> }}
-         */
-        decodeOAuthPayload: function (rawInput) {
-            if (!rawInput || typeof rawInput !== 'string') {
-                throw new Error('Authorization payload is empty.');
-            }
-            var trimmed = rawInput.trim();
-            var parsed = null;
-
-            if (trimmed.charAt(0) === '{') {
-                parsed = JSON.parse(trimmed);
-            } else {
-                var normalized = trimmed.replace(/-/g, '+').replace(/_/g, '/');
-                var decodedJson;
-                if (typeof global.atob === 'function') {
-                    var binary = global.atob(normalized);
-                    var bytes = new Uint8Array(binary.length);
-                    for (var i = 0; i < binary.length; i += 1) {
-                        bytes[i] = binary.charCodeAt(i);
-                    }
-                    decodedJson =
-                        typeof TextDecoder !== 'undefined'
-                            ? new TextDecoder().decode(bytes)
-                            : binary;
-                } else if (typeof Buffer !== 'undefined') {
-                    decodedJson = Buffer.from(normalized, 'base64').toString('utf8');
-                } else {
-                    throw new Error('Base64 decoder unavailable.');
-                }
-                parsed = JSON.parse(decodedJson);
-            }
-
-            if (!parsed || typeof parsed !== 'object') {
-                throw new Error('Invalid authorization payload.');
-            }
-            if (parsed.tokens && typeof parsed.tokens === 'object') {
-                return {
-                    state: parsed.state ? String(parsed.state) : '',
-                    tokens: parsed.tokens,
-                };
-            }
-            if (parsed.access_token || parsed.refresh_token) {
-                return {
-                    state: '',
-                    tokens: parsed,
-                };
-            }
-            throw new Error('Payload does not contain OAuth tokens.');
-        },
-
-        /**
-         * Extract an OAuth authorization code from either a raw code string
-         * or a pasted redirect URL (`?code=...`).
-         * @param {string} rawInput
-         * @returns {string}
-         */
-        extractAuthCode: function (rawInput) {
-            if (!rawInput || typeof rawInput !== 'string') {
-                return '';
-            }
-            var trimmed = rawInput.trim();
-            if (/^https?:\/\//i.test(trimmed)) {
-                try {
-                    var url = new URL(trimmed);
-                    return url.searchParams.get('code') || '';
-                } catch (_) {
-                    return trimmed;
-                }
-            }
-            return trimmed;
-        },
-
-        /**
          * Extract Google Drive file IDs from comma/newline separated IDs or Drive URLs.
          * @param {string} rawInput
          * @returns {string[]}
@@ -212,643 +136,122 @@
     }
 
     /**
-     * 3-Tab Google Drive Account Authorization Wizard Modal:
-     *   1. 1-Click Google Sign-In (Relay popup + postMessage + paste-payload fallback)
-     *   2. Own OAuth App (BYOC)
-     *   3. Service Account JSON
+     * Google Service Account Configuration Modal (never expires, no OAuth re-login).
      */
     Ext.define('PVE.gdrive.AuthWizardWindow', {
         extend: 'Ext.window.Window',
         alias: 'widget.pveGDriveAuthWizard',
 
-        title: _('Connect Google Drive Account'),
+        title: _('Configure Google Service Account'),
         modal: true,
-        width: 600,
-        bodyPadding: 10,
+        width: 580,
+        bodyPadding: 12,
         resizable: false,
 
         onAccountCreated: null,
-        _oauthState: null,
-        _byocState: null,
-        _messageHandler: null,
 
         initComponent: function () {
             var me = this;
 
-            var uiOrigin =
-                global.location && global.location.origin ? String(global.location.origin) : '';
-            var defaultCallbackUri = uiOrigin ? uiOrigin + '/pve2/gdrive-oauth-callback.html' : '';
-
-            var relayModeBadge = Ext.create('Ext.form.field.Display', {
-                fieldLabel: _('Active Relay'),
-                value: _('Checking relay configuration...'),
-            });
-
-            var relayStatusField = Ext.create('Ext.form.field.Display', {
-                fieldLabel: _('Status'),
-                value: _('Click "Sign in with Google" to authorize access.'),
-            });
-
-            var relayAccountIdField = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Account Label'),
-                name: 'relay_account_id',
-                emptyText: _('Optional (auto-detected from Google email)'),
-            });
-
-            var relayPayloadField = Ext.create('Ext.form.field.TextArea', {
-                fieldLabel: _('Paste Payload / Code'),
-                name: 'relay_payload',
-                height: 90,
-                emptyText: _('Fallback: paste the Authorization Payload or Code copied from the callback window if automatic handoff failed.'),
-            });
-
-            var finishOAuth = function (extraParams, statusTarget) {
-                if (statusTarget) {
-                    statusTarget.setValue(_('Completing authorization...'));
-                }
-                Utils.apiRequest({
-                    url: '/api2/json/gdrive/oauth/finish',
-                    method: 'POST',
-                    params: extraParams,
-                    waitMsgTarget: me,
-                    success: function (response) {
-                        var account =
-                            (response.result && response.result.data && response.result.data.account) ||
-                            (response.result && response.result.data) ||
-                            null;
-                        if (typeof me.onAccountCreated === 'function') {
-                            me.onAccountCreated(account);
-                        }
-                        me.close();
-                    },
-                    failure: function (response) {
-                        var msg = response.htmlStatus || _('Authorization failed.');
-                        if (statusTarget) {
-                            statusTarget.setValue(_('Error: ') + msg);
-                        }
-                        Ext.Msg.alert(_('Error'), msg);
-                    },
-                });
-            };
-
-            var finishRelayPayload = function (state, tokens, accountId) {
-                var params = {
-                    state: state,
-                    tokens_json: JSON.stringify(tokens),
-                };
-                var trimmedAccountId = accountId ? String(accountId).trim() : '';
-                if (trimmedAccountId) {
-                    params.account_id = trimmedAccountId;
-                }
-                finishOAuth(params, relayStatusField);
-            };
-
-            var finishOAuthCode = function (state, code, accountId, statusTarget) {
-                var params = {
-                    state: state,
-                    code: code,
-                };
-                var trimmedAccountId = accountId ? String(accountId).trim() : '';
-                if (trimmedAccountId) {
-                    params.account_id = trimmedAccountId;
-                }
-                finishOAuth(params, statusTarget);
-            };
-
-            var byocAccountId = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Account Label'),
-                emptyText: _('Optional (auto-detected from Google email)'),
-            });
-            var byocClientId = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Client ID'),
-                allowBlank: false,
-            });
-            var byocClientSecret = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Client Secret'),
-                inputType: 'password',
-                allowBlank: false,
-            });
-            var byocScope = Ext.create('Ext.form.field.ComboBox', {
-                fieldLabel: _('OAuth Scope'),
-                store: [
-                    ['drive.file', _('drive.file (Recommended - Per-file access)')],
-                    ['drive', _('drive (Full Google Drive access)')],
-                ],
-                value: 'drive.file',
-                editable: false,
-                forceSelection: true,
-                queryMode: 'local',
-            });
-            var byocRedirectUri = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Redirect URI'),
-                emptyText: _('Optional (defaults to local/relay URI)'),
-            });
-            var byocAuthUrlDisplay = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Auth URL'),
-                readOnly: true,
-                hidden: true,
-            });
-            var byocCodeField = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Auth Code / URL'),
-                emptyText: _('Paste authorization code or full callback URL'),
-            });
-
             var saAccountId = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Account Label'),
-                emptyText: _('Optional (auto-detected from service account email)'),
+                fieldLabel: _('Profile ID (optional)'),
+                emptyText: _('Auto-derived from client_email if blank'),
+                width: '100%',
             });
-            var saJsonField = Ext.create('Ext.form.field.TextArea', {
+
+            var saJsonArea = Ext.create('Ext.form.field.TextArea', {
                 fieldLabel: _('Service Account JSON'),
-                height: 190,
+                emptyText: _('Paste contents of Google Service Account .json key file...'),
+                height: 180,
+                width: '100%',
                 allowBlank: false,
-                emptyText: _('Paste Google Cloud Service Account JSON key contents...'),
             });
 
-            var selfRelayEnabled = Ext.create('Ext.form.field.Checkbox', {
-                fieldLabel: _('Enable Self-Hosted Relay'),
-                boxLabel: _('Use this Proxmox UI as the OAuth relay for 1-Click Sign-In'),
-                inputValue: true,
-                uncheckedValue: false,
-            });
-            var selfRelayClientId = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Google Client ID'),
-                emptyText: _('e.g. 1234567890-abc.apps.googleusercontent.com'),
-            });
-            var selfRelayClientSecret = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Google Client Secret'),
-                inputType: 'password',
-                emptyText: _('Required on initial setup; leave blank to keep saved secret'),
-            });
-            var selfRelayRedirectUri = Ext.create('Ext.form.field.Text', {
-                fieldLabel: _('Callback Redirect URI'),
-                value: defaultCallbackUri,
-                emptyText: defaultCallbackUri || _('https://<pve-host>:8006/pve2/gdrive-oauth-callback.html'),
-            });
-            var selfRelayScope = Ext.create('Ext.form.field.ComboBox', {
-                fieldLabel: _('Default OAuth Scope'),
-                store: [
-                    ['drive.file', _('drive.file (Recommended - Per-file access)')],
-                    ['drive', _('drive (Full Google Drive access)')],
-                ],
-                value: 'drive.file',
-                editable: false,
-                forceSelection: true,
-                queryMode: 'local',
-            });
-            var selfRelayStatusDisplay = Ext.create('Ext.form.field.Display', {
-                fieldLabel: _('Secret Status'),
-                value: _('Not configured'),
-            });
-
-            var updateRelayStatusUI = function (cfg) {
-                var data = cfg || {};
-                selfRelayEnabled.setValue(Boolean(data.enabled));
-                if (data.client_id) {
-                    selfRelayClientId.setValue(data.client_id);
-                }
-                if (data.redirect_uri) {
-                    selfRelayRedirectUri.setValue(data.redirect_uri);
-                } else if (defaultCallbackUri && !selfRelayRedirectUri.getValue()) {
-                    selfRelayRedirectUri.setValue(defaultCallbackUri);
-                }
-                if (data.scope) {
-                    selfRelayScope.setValue(data.scope);
-                }
-                selfRelayStatusDisplay.setValue(
-                    data.has_client_secret
-                        ? _('Client secret stored in /etc/pve/priv/gdrive/relay.json')
-                        : _('No client secret stored')
-                );
-                if (data.enabled) {
-                    relayModeBadge.setValue(
-                        Ext.String.htmlEncode(
-                            _('Self-Hosted in Proxmox UI (') +
-                                (data.redirect_uri || defaultCallbackUri || '/pve2/gdrive-oauth-callback.html') +
-                                ')'
-                        )
-                    );
-                } else {
-                    relayModeBadge.setValue(_('External Cloud Relay (default) — or configure Self-Hosted tab'));
-                }
-            };
-
-            var attachOAuthMessageListener = function (expectedMode) {
-                me._detachMessageListener();
-                me._messageHandler = function (event) {
-                    var msg = event && event.data;
-                    if (!msg || (msg.type !== 'pve-gdrive-oauth' && msg.type !== 'pve-gdrive-oauth-code')) {
-                        return;
-                    }
-                    var expectedState = expectedMode === 'byoc' ? me._byocState : me._oauthState;
-                    if (expectedState && msg.state && msg.state !== expectedState) {
-                        return;
-                    }
-                    me._detachMessageListener();
-                    if (msg.error) {
-                        if (expectedMode === 'byoc') {
-                            Ext.Msg.alert(_('Error'), _('Authorization denied: ') + msg.error);
-                        } else {
-                            relayStatusField.setValue(_('Authorization denied: ') + msg.error);
+            var saFileField = Ext.create('Ext.form.field.File', {
+                fieldLabel: _('Upload JSON Key File'),
+                buttonText: _('Browse...'),
+                width: '100%',
+                listeners: {
+                    change: function (field) {
+                        var fileInput =
+                            field.fileInputEl && field.fileInputEl.dom
+                                ? field.fileInputEl.dom
+                                : null;
+                        var file =
+                            fileInput && fileInput.files && fileInput.files[0]
+                                ? fileInput.files[0]
+                                : null;
+                        if (file && typeof global.FileReader === 'function') {
+                            var reader = new global.FileReader();
+                            reader.onload = function (ev) {
+                                if (ev && ev.target && typeof ev.target.result === 'string') {
+                                    saJsonArea.setValue(ev.target.result);
+                                }
+                            };
+                            reader.readAsText(file);
                         }
-                        return;
-                    }
-                    if (msg.type === 'pve-gdrive-oauth' && msg.tokens) {
-                        finishRelayPayload(
-                            msg.state || expectedState,
-                            msg.tokens,
-                            relayAccountIdField.getValue()
-                        );
-                    } else if (msg.type === 'pve-gdrive-oauth-code' && msg.code) {
-                        if (expectedMode === 'byoc') {
-                            byocCodeField.setValue(msg.code);
-                            finishOAuthCode(
-                                msg.state || expectedState,
-                                msg.code,
-                                byocAccountId.getValue(),
-                                null
-                            );
-                        } else {
-                            finishOAuthCode(
-                                msg.state || expectedState,
-                                msg.code,
-                                relayAccountIdField.getValue(),
-                                relayStatusField
-                            );
-                        }
-                    }
-                };
-                if (typeof global.addEventListener === 'function') {
-                    global.addEventListener('message', me._messageHandler);
-                }
-            };
+                    },
+                },
+            });
 
             me.items = [
                 {
-                    xtype: 'tabpanel',
-                    border: false,
-                    defaults: {
-                        bodyPadding: 12,
-                        layout: 'anchor',
-                        defaults: { anchor: '100%', labelWidth: 140 },
-                    },
-                    items: [
-                        {
-                            title: _('1-Click Google Sign-In'),
-                            items: [
-                                relayModeBadge,
-                                relayAccountIdField,
-                                relayStatusField,
-                                {
-                                    xtype: 'container',
-                                    margin: '6 0 12 0',
-                                    items: [
-                                        {
-                                            xtype: 'button',
-                                            text: _('Sign in with Google'),
-                                            iconCls: 'fa fa-google',
-                                            handler: function () {
-                                                relayStatusField.setValue(_('Starting Google OAuth session...'));
-                                                var startParams = { mode: 'relay' };
-                                                if (uiOrigin) {
-                                                    startParams.ui_origin = uiOrigin;
-                                                }
-                                                Utils.apiRequest({
-                                                    url: '/api2/json/gdrive/oauth/start',
-                                                    method: 'POST',
-                                                    params: startParams,
-                                                    waitMsgTarget: me,
-                                                    success: function (response) {
-                                                        var data = (response.result && response.result.data) || {};
-                                                        me._oauthState = data.state || '';
-                                                        var authUrl = data.auth_url;
-                                                        if (!authUrl) {
-                                                            Ext.Msg.alert(_('Error'), _('Daemon did not return an auth_url.'));
-                                                            return;
-                                                        }
-
-                                                        attachOAuthMessageListener('relay');
-
-                                                        relayStatusField.setValue(_('Waiting for Google sign-in in popup window...'));
-                                                        if (typeof global.open === 'function') {
-                                                            var popup = global.open(
-                                                                authUrl,
-                                                                'pve_gdrive_oauth',
-                                                                'width=560,height=720,menubar=no,toolbar=no,status=no'
-                                                            );
-                                                            if (!popup) {
-                                                                relayStatusField.setValue(
-                                                                    _('Popup blocked! Allow popups or copy the Authorization Payload/Code manually.')
-                                                                );
-                                                            }
-                                                        }
-                                                    },
-                                                    failure: function (response) {
-                                                        relayStatusField.setValue(_('Failed to start OAuth flow.'));
-                                                        Ext.Msg.alert(_('Error'), response.htmlStatus || _('Failed to start OAuth flow.'));
-                                                    },
-                                                });
-                                            },
-                                        },
-                                    ],
-                                },
-                                relayPayloadField,
-                                {
-                                    xtype: 'button',
-                                    text: _('Complete Sign-In with Pasted Payload'),
-                                    anchor: null,
-                                    handler: function () {
-                                        var rawInput = relayPayloadField.getValue().trim();
-                                        if (!rawInput) {
-                                            Ext.Msg.alert(_('Invalid Payload'), _('Paste the Authorization Payload or Code first.'));
-                                            return;
-                                        }
-                                        try {
-                                            var decoded = Utils.decodeOAuthPayload(rawInput);
-                                            var state = decoded.state || me._oauthState;
-                                            if (!state) {
-                                                Ext.Msg.alert(_('Error'), _('Missing OAuth state. Start sign-in first or paste the full relay payload.'));
-                                                return;
-                                            }
-                                            finishRelayPayload(state, decoded.tokens, relayAccountIdField.getValue());
-                                        } catch (err) {
-                                            var code = Utils.extractAuthCode(rawInput);
-                                            if (code && me._oauthState) {
-                                                finishOAuthCode(
-                                                    me._oauthState,
-                                                    code,
-                                                    relayAccountIdField.getValue(),
-                                                    relayStatusField
-                                                );
-                                            } else {
-                                                Ext.Msg.alert(_('Invalid Payload'), err.message);
-                                            }
-                                        }
-                                    },
-                                },
-                            ],
-                        },
-                        {
-                            title: _('Own OAuth App (BYOC)'),
-                            items: [
-                                byocAccountId,
-                                byocClientId,
-                                byocClientSecret,
-                                byocScope,
-                                byocRedirectUri,
-                                {
-                                    xtype: 'container',
-                                    layout: 'hbox',
-                                    margin: '4 0 10 0',
-                                    items: [
-                                        {
-                                            xtype: 'button',
-                                            text: _('Generate Authorization URL'),
-                                            margin: '0 8 0 0',
-                                            handler: function () {
-                                                if (!byocClientId.isValid() || !byocClientSecret.isValid()) {
-                                                    Ext.Msg.alert(_('Error'), _('Client ID and Client Secret are required.'));
-                                                    return;
-                                                }
-                                                var params = {
-                                                    mode: 'byoc',
-                                                    client_id: byocClientId.getValue().trim(),
-                                                    client_secret: byocClientSecret.getValue().trim(),
-                                                    scope: byocScope.getValue(),
-                                                };
-                                                if (uiOrigin) {
-                                                    params.ui_origin = uiOrigin;
-                                                }
-                                                var redir = byocRedirectUri.getValue().trim();
-                                                if (redir) {
-                                                    params.redirect_uri = redir;
-                                                }
-                                                Utils.apiRequest({
-                                                    url: '/api2/json/gdrive/oauth/start',
-                                                    method: 'POST',
-                                                    params: params,
-                                                    waitMsgTarget: me,
-                                                    success: function (response) {
-                                                        var data = (response.result && response.result.data) || {};
-                                                        me._byocState = data.state || '';
-                                                        byocAuthUrlDisplay.setValue(data.auth_url || '');
-                                                        byocAuthUrlDisplay.setHidden(false);
-                                                        attachOAuthMessageListener('byoc');
-                                                        if (data.auth_url && typeof global.open === 'function') {
-                                                            global.open(
-                                                                data.auth_url,
-                                                                'pve_gdrive_byoc_oauth',
-                                                                'width=560,height=720,menubar=no,toolbar=no,status=no'
-                                                            );
-                                                        }
-                                                    },
-                                                    failure: function (response) {
-                                                        Ext.Msg.alert(_('Error'), response.htmlStatus || _('Failed to start BYOC OAuth flow.'));
-                                                    },
-                                                });
-                                            },
-                                        },
-                                        {
-                                            xtype: 'button',
-                                            text: _('Use Proxmox UI Callback'),
-                                            handler: function () {
-                                                if (defaultCallbackUri) {
-                                                    byocRedirectUri.setValue(defaultCallbackUri);
-                                                }
-                                            },
-                                        },
-                                    ],
-                                },
-                                byocAuthUrlDisplay,
-                                byocCodeField,
-                                {
-                                    xtype: 'button',
-                                    text: _('Complete BYOC Authorization'),
-                                    anchor: null,
-                                    handler: function () {
-                                        var code = Utils.extractAuthCode(byocCodeField.getValue());
-                                        if (!me._byocState) {
-                                            Ext.Msg.alert(_('Error'), _('Generate an Authorization URL first.'));
-                                            return;
-                                        }
-                                        if (!code) {
-                                            Ext.Msg.alert(_('Error'), _('Paste the authorization code or callback URL from Google.'));
-                                            return;
-                                        }
-                                        var params = {
-                                            state: me._byocState,
-                                            code: code,
-                                        };
-                                        var byocAcc = byocAccountId.getValue().trim();
-                                        if (byocAcc) {
-                                            params.account_id = byocAcc;
-                                        }
-                                        Utils.apiRequest({
-                                            url: '/api2/json/gdrive/oauth/finish',
-                                            method: 'POST',
-                                            params: params,
-                                            waitMsgTarget: me,
-                                            success: function (response) {
-                                                var account =
-                                                    (response.result && response.result.data && response.result.data.account) ||
-                                                    (response.result && response.result.data) ||
-                                                    null;
-                                                if (typeof me.onAccountCreated === 'function') {
-                                                    me.onAccountCreated(account);
-                                                }
-                                                me.close();
-                                            },
-                                            failure: function (response) {
-                                                Ext.Msg.alert(_('Error'), response.htmlStatus || _('BYOC authorization failed.'));
-                                            },
-                                        });
-                                    },
-                                },
-                            ],
-                        },
-                        {
-                            title: _('Service Account JSON'),
-                            items: [
-                                saAccountId,
-                                saJsonField,
-                                {
-                                    xtype: 'button',
-                                    text: _('Add Service Account'),
-                                    anchor: null,
-                                    handler: function () {
-                                        var rawJson = saJsonField.getValue().trim();
-                                        if (!rawJson) {
-                                            Ext.Msg.alert(_('Error'), _('Service Account JSON is required.'));
-                                            return;
-                                        }
-                                        try {
-                                            var parsed = JSON.parse(rawJson);
-                                            if (parsed.type !== 'service_account' || !parsed.client_email || !parsed.private_key) {
-                                                Ext.Msg.alert(_('Error'), _('JSON must be a valid Google Service Account key.'));
-                                                return;
-                                            }
-                                        } catch (_) {
-                                            Ext.Msg.alert(_('Error'), _('Invalid JSON syntax.'));
-                                            return;
-                                        }
-
-                                        var saParams = {
-                                            service_account_json: rawJson,
-                                        };
-                                        var saAcc = saAccountId.getValue().trim();
-                                        if (saAcc) {
-                                            saParams.account_id = saAcc;
-                                        }
-                                        Utils.apiRequest({
-                                            url: '/api2/json/gdrive/accounts/service-account',
-                                            method: 'POST',
-                                            params: saParams,
-                                            waitMsgTarget: me,
-                                            success: function (response) {
-                                                var account =
-                                                    (response.result && response.result.data && response.result.data.account) ||
-                                                    (response.result && response.result.data) ||
-                                                    null;
-                                                if (typeof me.onAccountCreated === 'function') {
-                                                    me.onAccountCreated(account);
-                                                }
-                                                me.close();
-                                            },
-                                    failure: function (response) {
-                                        Ext.Msg.alert(_('Error'), response.htmlStatus || _('Failed to register service account.'));
-                                    },
-                                });
-                            },
-                        },
-                    ],
+                    xtype: 'displayfield',
+                    value:
+                        _('Service Accounts authenticate permanently with Google Drive without OAuth consent screens, redirect URLs, or periodic re-logins.') +
+                        '<br><br><b>' +
+                        _('Setup:') +
+                        '</b> ' +
+                        _('1) Create a Service Account key (JSON) in Google Cloud IAM. 2) Share your Google Shared Drive (or Drive folder) with the Service Account email (client_email). 3) Upload or paste the JSON key below.'),
                 },
-                {
-                    title: _('Host OAuth Relay in Proxmox'),
-                    items: [
-                        {
-                            xtype: 'displayfield',
-                            fieldLabel: _('Setup Info'),
-                            value: _('Register the Callback Redirect URI below as an Authorized Redirect URI on a Web Application OAuth client in Google Cloud Console. Once enabled, 1-Click Google Sign-In stays 100% inside this Proxmox UI.'),
-                        },
-                        selfRelayEnabled,
-                        selfRelayClientId,
-                        selfRelayClientSecret,
-                        selfRelayRedirectUri,
-                        selfRelayScope,
-                        selfRelayStatusDisplay,
-                        {
-                            xtype: 'container',
-                            layout: 'hbox',
-                            margin: '8 0 0 0',
-                            items: [
-                                {
-                                    xtype: 'button',
-                                    text: _('Save Relay Settings'),
-                                    margin: '0 8 0 0',
-                                    handler: function () {
-                                        var enabled = Boolean(selfRelayEnabled.getValue());
-                                        var cid = selfRelayClientId.getValue().trim();
-                                        if (enabled && !cid) {
-                                            Ext.Msg.alert(_('Error'), _('Google Client ID is required when enabling the Proxmox-hosted relay.'));
-                                            return;
-                                        }
-                                        var saveParams = {
-                                            enabled: enabled ? 1 : 0,
-                                            scope: selfRelayScope.getValue(),
-                                        };
-                                        if (cid) {
-                                            saveParams.client_id = cid;
-                                        }
-                                        var csec = selfRelayClientSecret.getValue().trim();
-                                        if (csec) {
-                                            saveParams.client_secret = csec;
-                                        }
-                                        var redir = selfRelayRedirectUri.getValue().trim();
-                                        if (redir) {
-                                            saveParams.redirect_uri = redir;
-                                        }
-                                        Utils.apiRequest({
-                                            url: '/api2/json/gdrive/relay/config',
-                                            method: 'POST',
-                                            params: saveParams,
-                                            waitMsgTarget: me,
-                                            success: function (response) {
-                                                var saved = (response.result && response.result.data) || {};
-                                                selfRelayClientSecret.setValue('');
-                                                updateRelayStatusUI(saved);
-                                                Ext.Msg.alert(
-                                                    _('Saved'),
-                                                    enabled
-                                                        ? _('Self-hosted Proxmox OAuth relay enabled. You can now use 1-Click Google Sign-In directly.')
-                                                        : _('Self-hosted Proxmox OAuth relay disabled.')
-                                                );
-                                            },
-                                            failure: function (response) {
-                                                Ext.Msg.alert(_('Error'), response.htmlStatus || _('Failed to save relay settings.'));
-                                            },
-                                        });
-                                    },
-                                },
-                                {
-                                    xtype: 'button',
-                                    text: _('Copy Callback URI'),
-                                    handler: function () {
-                                        var uri = selfRelayRedirectUri.getValue().trim() || defaultCallbackUri;
-                                        if (uri && global.navigator && global.navigator.clipboard && typeof global.navigator.clipboard.writeText === 'function') {
-                                            global.navigator.clipboard.writeText(uri);
-                                        }
-                                    },
-                                },
-                            ],
-                        },
-                    ],
-                },
-            ],
-        },
-    ];
+                saAccountId,
+                saFileField,
+                saJsonArea,
+            ];
 
             me.buttons = [
                 {
-                    text: _('Close'),
+                    text: _('Save Service Account'),
+                    iconCls: 'fa fa-check',
+                    handler: function () {
+                        var jsonText = saJsonArea.getValue().trim();
+                        if (!jsonText) {
+                            Ext.Msg.alert(_('Error'), _('Upload or paste a valid Service Account JSON key.'));
+                            return;
+                        }
+                        var saParams = {
+                            service_account_json: jsonText,
+                        };
+                        var saIdVal = saAccountId.getValue().trim();
+                        if (saIdVal) {
+                            saParams.account_id = saIdVal;
+                        }
+                        Utils.apiRequest({
+                            url: '/api2/json/gdrive/accounts/service-account',
+                            method: 'POST',
+                            params: saParams,
+                            waitMsgTarget: me,
+                            success: function (response) {
+                                var account =
+                                    response.result &&
+                                    response.result.data &&
+                                    response.result.data.account;
+                                if (typeof me.onAccountCreated === 'function') {
+                                    me.onAccountCreated(account);
+                                }
+                                me.close();
+                            },
+                            failure: function (response) {
+                                Ext.Msg.alert(
+                                    _('Service Account Error'),
+                                    response.htmlStatus || _('Failed to save Service Account.')
+                                );
+                            },
+                        });
+                    },
+                },
+                {
+                    text: _('Cancel'),
                     handler: function () {
                         me.close();
                     },
@@ -856,30 +259,6 @@
             ];
 
             me.callParent();
-
-            Utils.apiRequest({
-                url: '/api2/json/gdrive/relay/config',
-                method: 'GET',
-                success: function (response) {
-                    updateRelayStatusUI((response.result && response.result.data) || {});
-                },
-                failure: function () {
-                    updateRelayStatusUI({ enabled: false });
-                },
-            });
-        },
-
-        _detachMessageListener: function () {
-            var me = this;
-            if (me._messageHandler && typeof global.removeEventListener === 'function') {
-                global.removeEventListener('message', me._messageHandler);
-                me._messageHandler = null;
-            }
-        },
-
-        onDestroy: function () {
-            this._detachMessageListener();
-            this.callParent();
         },
     });
 
@@ -943,7 +322,7 @@
                 editable: false,
                 forceSelection: false,
                 allowBlank: false,
-                emptyText: _('Select or sign in with Google...'),
+                emptyText: _('Select or configure a Service Account...'),
                 listeners: {
                     change: function (_field, newVal) {
                         loadDrives(newVal);
@@ -964,7 +343,7 @@
                             rows.push({
                                 id: acc.id,
                                 email: acc.email || acc.id,
-                                mode: acc.mode || 'oauth',
+                                mode: acc.mode || 'service_account',
                                 scope: acc.scope || '',
                                 label:
                                     acc.id +
@@ -1044,8 +423,8 @@
                     items: [
                         {
                             xtype: 'button',
-                            text: _('Sign in with Google'),
-                            iconCls: 'fa fa-google',
+                            text: _('Configure Service Account'),
+                            iconCls: 'fa fa-key',
                             handler: function () {
                                 Ext.create('PVE.gdrive.AuthWizardWindow', {
                                     onAccountCreated: function (account) {
@@ -1448,5 +827,11 @@
         });
     };
 
-    PVE.gdrive.installContentViewHooks();
+    try {
+        PVE.gdrive.installContentViewHooks();
+    } catch (err) {
+        if (global.console && typeof global.console.error === 'function') {
+            global.console.error('pve-gdrive UI hook warning:', err);
+        }
+    }
 })(typeof window !== 'undefined' ? window : globalThis);

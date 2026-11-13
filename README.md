@@ -44,24 +44,15 @@ Options: `--yes` (non-interactive), `--skip-build` (use existing `.deb` in `dist
 
 ---
 
-## Easy Google Login Modes
+## Google Service Account Authentication (No OAuth, No Re-Login)
 
-Open the Proxmox Web UI and navigate to **Datacenter -> Storage -> Add -> Google Drive**, then click **Sign in with Google**. Three authentication modes plus built-in self-hosted OAuth relay hosting are supported:
+`pve-storage-gdrive` uses **Google Service Account JSON** authentication exclusively — no OAuth consent screen, no redirect URIs, and no periodic token re-logins.
 
-1. **1-Click Google Sign-In (OAuth2 + PKCE Relay)**
-   - Uses either a self-hosted OAuth relay inside Proxmox VE itself (when configured in **Host OAuth Relay in Proxmox**) or the external Cloudflare Worker relay (`https://auth.pve-gdrive.org/oauth/callback` by default) with PKCE (`code_verifier` / `code_challenge`).
-   - Completes automatically via `window.opener.postMessage`, with a **Copy Authorization Payload** fallback when popups or `window.opener` are restricted by browser privacy settings.
-   - Uses the least-privilege `drive.file` scope by default (accesses only files/folders created or imported by `pve-storage-gdrive`).
-2. **Own OAuth App (BYOC)**
-   - Bring your own Google Cloud OAuth2 Desktop/Web client (`client_id` and `client_secret`) with selectable `drive.file` or full `drive` scope. Includes a **Use Proxmox UI Callback** shortcut pre-filling `https://<pve-host>:8006/pve2/gdrive-oauth-callback.html`.
-3. **Service Account JSON**
-   - Upload or paste a Google Cloud Service Account JSON key for headless RS256 JWT authentication (ideal for automated **Shared Drive** deployments).
-4. **Host OAuth Relay in Proxmox (Self-Hosted Same-Origin Relay)**
-   - Configure your Google Cloud OAuth Client ID & Secret directly inside the Proxmox Web UI wizard (**Host OAuth Relay in Proxmox** tab, requiring `Sys.Modify` privilege).
-   - Serves a static same-origin OAuth callback page directly from `pveproxy` at `/pve2/gdrive-oauth-callback.html` (`/usr/share/pve-manager/gdrive-oauth-callback.html`) — no external Cloudflare Worker required.
-   - Stores relay credentials in `/etc/pve/priv/gdrive/relay.json` (`0600`, never returning `client_secret` over the API) so they automatically replicate across your Proxmox cluster and upgrade **1-Click Google Sign-In** to use your Proxmox UI relay automatically.
+1. In Google Cloud Console, create a **Service Account** (`IAM & Admin -> Service Accounts`) and generate a **JSON key**.
+2. Share your Google **Shared Drive** (recommended) or Drive folder with the Service Account's `client_email`.
+3. Open the Proxmox Web UI -> **Datacenter -> Storage -> Add -> Google Drive**, click **Configure Service Account**, and upload or paste the JSON key.
 
-Account profiles are stored atomically with `0600` permissions in `/etc/pve/priv/gdrive/accounts/<id>.json`. Short-lived access tokens are refreshed in memory by `pve-gdrived` so routine refreshes never churn `/etc/pve` (`pmxcfs`).
+Account profiles are stored atomically in `/etc/pve/priv/gdrive/accounts/<id>.json` (protected by `pmxcfs` `/etc/pve/priv`). Short-lived access tokens are minted and refreshed in memory by `pve-gdrived` using RS256 JWTs signed via `openssl`, so routine token refreshes never churn `/etc/pve` (`pmxcfs`).
 
 ---
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -11,17 +12,12 @@ from typing import Any
 
 DEFAULT_ACCOUNTS_DIR = "/etc/pve/priv/gdrive/accounts"
 DEFAULT_STORAGES_DIR = "/etc/pve/priv/gdrive/storages"
-DEFAULT_RELAY_CONFIG_PATH = "/etc/pve/priv/gdrive/relay.json"
 DEFAULT_SOCK_PATH = "/run/pve-gdrived.sock"
 DEFAULT_RUN_DIR = "/run/pve-gdrive"
 DEFAULT_CACHE_DIR = "/var/cache/pve-gdrive"
 DEFAULT_MNT_BASE = "/mnt/pve"
 
-DEFAULT_RELAY_URL = "https://auth.pve-gdrive.org/oauth/callback"
-DEFAULT_RELAY_CLIENT_ID = "pve-storage-gdrive-relay"
-DEFAULT_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 DEFAULT_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-DEFAULT_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 DEFAULT_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
 DEFAULT_DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
 
@@ -35,16 +31,11 @@ class Config:
 
     accounts_dir: str = DEFAULT_ACCOUNTS_DIR
     storages_dir: str = DEFAULT_STORAGES_DIR
-    relay_config_path: str = DEFAULT_RELAY_CONFIG_PATH
     sock_path: str = DEFAULT_SOCK_PATH
     run_dir: str = DEFAULT_RUN_DIR
     cache_dir: str = DEFAULT_CACHE_DIR
     mnt_base: str = DEFAULT_MNT_BASE
-    oauth_relay_url: str = DEFAULT_RELAY_URL
-    relay_client_id: str = DEFAULT_RELAY_CLIENT_ID
-    google_auth_url: str = DEFAULT_GOOGLE_AUTH_URL
     google_token_url: str = DEFAULT_GOOGLE_TOKEN_URL
-    google_userinfo_url: str = DEFAULT_GOOGLE_USERINFO_URL
     drive_api_base: str = DEFAULT_DRIVE_API_BASE
     drive_upload_base: str = DEFAULT_DRIVE_UPLOAD_BASE
     rclone_bin: str = "rclone"
@@ -61,25 +52,12 @@ class Config:
         return cls(
             accounts_dir=os.environ.get("PVE_GDRIVE_ACCOUNTS_DIR", DEFAULT_ACCOUNTS_DIR),
             storages_dir=os.environ.get("PVE_GDRIVE_STORAGES_DIR", DEFAULT_STORAGES_DIR),
-            relay_config_path=os.environ.get(
-                "PVE_GDRIVE_RELAY_CONFIG", DEFAULT_RELAY_CONFIG_PATH
-            ),
             sock_path=os.environ.get("PVE_GDRIVE_SOCK", DEFAULT_SOCK_PATH),
             run_dir=os.environ.get("PVE_GDRIVE_RUN_DIR", DEFAULT_RUN_DIR),
             cache_dir=os.environ.get("PVE_GDRIVE_CACHE_DIR", DEFAULT_CACHE_DIR),
             mnt_base=os.environ.get("PVE_GDRIVE_MNT_BASE", DEFAULT_MNT_BASE),
-            oauth_relay_url=os.environ.get("PVE_GDRIVE_RELAY_URL", DEFAULT_RELAY_URL),
-            relay_client_id=os.environ.get(
-                "PVE_GDRIVE_RELAY_CLIENT_ID", DEFAULT_RELAY_CLIENT_ID
-            ),
-            google_auth_url=os.environ.get(
-                "PVE_GDRIVE_GOOGLE_AUTH_URL", DEFAULT_GOOGLE_AUTH_URL
-            ),
             google_token_url=os.environ.get(
                 "PVE_GDRIVE_GOOGLE_TOKEN_URL", DEFAULT_GOOGLE_TOKEN_URL
-            ),
-            google_userinfo_url=os.environ.get(
-                "PVE_GDRIVE_GOOGLE_USERINFO_URL", DEFAULT_GOOGLE_USERINFO_URL
             ),
             drive_api_base=os.environ.get(
                 "PVE_GDRIVE_DRIVE_API_BASE", DEFAULT_DRIVE_API_BASE
@@ -113,10 +91,27 @@ def validate_store_id(storeid: str) -> str:
     return storeid
 
 
+def _is_pmxcfs_path(path: str) -> bool:
+    """Return True if path resides on Proxmox pmxcfs (/etc/pve), which disallows chmod."""
+    abs_path = os.path.abspath(path)
+    return abs_path == "/etc/pve" or abs_path.startswith("/etc/pve/")
+
+
+def _safe_chmod(path: str, mode: int) -> None:
+    """Apply chmod unless path is on pmxcfs (/etc/pve), where chmod returns EPERM."""
+    if _is_pmxcfs_path(path):
+        return
+    try:
+        os.chmod(path, mode)
+    except PermissionError as exc:
+        if exc.errno != errno.EPERM or not _is_pmxcfs_path(path):
+            raise
+
+
 def ensure_dir(path: str, mode: int = 0o700) -> str:
     """Create directory tree if missing and enforce mode on the target dir."""
     os.makedirs(path, mode=mode, exist_ok=True)
-    os.chmod(path, mode)
+    _safe_chmod(path, mode)
     return path
 
 
@@ -126,12 +121,12 @@ def atomic_write_bytes(path: str, data: bytes, mode: int = 0o600, dir_mode: int 
     ensure_dir(parent, mode=dir_mode)
     fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=parent)
     try:
-        os.chmod(tmp_path, mode)
+        _safe_chmod(tmp_path, mode)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(tmp_path, mode)
+        _safe_chmod(tmp_path, mode)
         os.replace(tmp_path, path)
     except BaseException:
         try:

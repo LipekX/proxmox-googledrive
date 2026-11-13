@@ -236,6 +236,7 @@ function loadWebUiWithMocks() {
     }
     initComponent() {}
     onDestroy() {}
+    close() { this._closed = true; }
   }
 
   class BaseContentView {
@@ -369,36 +370,16 @@ function loadWebUiWithMocks() {
                 },
               },
             });
-          } else if (opts.url === '/api2/json/gdrive/relay/config' && opts.method === 'GET' && opts.success) {
+          } else if (opts.url === '/api2/json/gdrive/accounts/service-account' && opts.method === 'POST' && opts.success) {
             opts.success({
               result: {
                 data: {
-                  enabled: false,
-                  client_id: '',
-                  has_client_secret: false,
-                  redirect_uri: '',
-                  scope: 'drive.file',
-                },
-              },
-            });
-          } else if (opts.url === '/api2/json/gdrive/relay/config' && opts.method === 'POST' && opts.success) {
-            opts.success({
-              result: {
-                data: {
-                  enabled: Boolean(opts.params && opts.params.enabled),
-                  client_id: (opts.params && opts.params.client_id) || '',
-                  has_client_secret: Boolean(opts.params && opts.params.client_secret),
-                  redirect_uri: (opts.params && opts.params.redirect_uri) || '',
-                  scope: (opts.params && opts.params.scope) || 'drive.file',
-                },
-              },
-            });
-          } else if (opts.url === '/api2/json/gdrive/oauth/start' && opts.success) {
-            opts.success({
-              result: {
-                data: {
-                  state: 'st-start-1',
-                  auth_url: 'https://accounts.google.com/o/oauth2/v2/auth?state=st-start-1',
+                  account: {
+                    id: (opts.params && opts.params.account_id) || 'sa-1',
+                    email: 'sa@proj.iam.gserviceaccount.com',
+                    mode: 'service_account',
+                    scope: 'drive',
+                  },
                 },
               },
             });
@@ -523,28 +504,9 @@ test('ui: ContentView hooks add Queue/Cache indicator and Import button for gdri
   assert.equal(view._gdriveQueueTimer, null);
 });
 
-test('ui: utils decodeOAuthPayload, extractAuthCode, and extractDriveFileIds work cleanly', () => {
+test('ui: utils extractDriveFileIds and formatBytes work cleanly', () => {
   const { sandbox } = loadWebUiWithMocks();
-  const { decodeOAuthPayload, extractAuthCode, extractDriveFileIds, formatBytes } =
-    sandbox.PVE.gdrive.Utils;
-
-  const b64 = encodePayload({
-    type: 'pve-gdrive-oauth',
-    state: 'st-1',
-    tokens: { access_token: 'acc', refresh_token: 'ref' },
-  });
-  const decoded = decodeOAuthPayload(b64);
-  assert.equal(decoded.state, 'st-1');
-  assert.equal(decoded.tokens.refresh_token, 'ref');
-
-  const rawJsonDecoded = decodeOAuthPayload('{"access_token":"a1"}');
-  assert.equal(rawJsonDecoded.tokens.access_token, 'a1');
-
-  assert.equal(
-    extractAuthCode('https://localhost:8080/cb?code=4/0A_xyz&scope=drive'),
-    '4/0A_xyz'
-  );
-  assert.equal(extractAuthCode('plain-code'), 'plain-code');
+  const { extractDriveFileIds, formatBytes } = sandbox.PVE.gdrive.Utils;
 
   assert.deepEqual(
     JSON.parse(
@@ -560,33 +522,21 @@ test('ui: utils decodeOAuthPayload, extractAuthCode, and extractDriveFileIds wor
   assert.equal(formatBytes(1536), '1.5 KiB');
 });
 
-test('ui: AuthWizardWindow and PickerModal omit empty optional params instead of sending undefined', () => {
+test('ui: AuthWizardWindow configures Service Account and PickerModal omits empty optional params', () => {
   const { sandbox, apiCalls } = loadWebUiWithMocks();
 
-  const wizard = sandbox.Ext.create('PVE.gdrive.AuthWizardWindow', {});
-  const tabs = wizard.items[0].items;
+  let createdAccount = null;
+  const wizard = sandbox.Ext.create('PVE.gdrive.AuthWizardWindow', {
+    onAccountCreated(acct) {
+      createdAccount = acct;
+    },
+  });
+  const saIdField = wizard.items[1];
+  const saJsonField = wizard.items[3];
+  const saveBtn = wizard.buttons[0];
 
-  // Tab 1: Relay paste-payload fallback with empty account_id
-  const relayTabItems = tabs[0].items;
-  const relayPayloadField = relayTabItems[4];
-  const relayFinishBtn = relayTabItems[5];
-  relayPayloadField.setValue(
-    encodePayload({ type: 'pve-gdrive-oauth', state: 'st-relay', tokens: { access_token: 'tok1' } })
-  );
-  relayFinishBtn.handler();
-
-  // Tab 2: BYOC complete with empty account_id
-  const byocTabItems = tabs[1].items;
-  const byocCodeField = byocTabItems[7];
-  const byocFinishBtn = byocTabItems[8];
-  wizard._byocState = 'st-byoc';
-  byocCodeField.setValue('auth-code-xyz');
-  byocFinishBtn.handler();
-
-  // Tab 3: Service account with empty account_id
-  const saTabItems = tabs[2].items;
-  const saJsonField = saTabItems[1];
-  const saSubmitBtn = saTabItems[2];
+  // Empty account_id is omitted
+  saIdField.setValue('');
   saJsonField.setValue(
     JSON.stringify({
       type: 'service_account',
@@ -594,7 +544,7 @@ test('ui: AuthWizardWindow and PickerModal omit empty optional params instead of
       private_key: '-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n',
     })
   );
-  saSubmitBtn.handler();
+  saveBtn.handler();
 
   // PickerModal with empty account & access_token
   const picker = sandbox.Ext.create('PVE.gdrive.PickerModal', {
@@ -604,123 +554,16 @@ test('ui: AuthWizardWindow and PickerModal omit empty optional params instead of
   picker.items[3].setValue('file123');
   picker.buttons[0].handler();
 
-  const relayCall = apiCalls.find(
-    (c) => c.url === '/api2/json/gdrive/oauth/finish' && c.params.state === 'st-relay'
-  );
-  assert.ok(relayCall);
-  assert.equal('account_id' in relayCall.params, false);
-
-  const byocCall = apiCalls.find(
-    (c) => c.url === '/api2/json/gdrive/oauth/finish' && c.params.state === 'st-byoc'
-  );
-  assert.ok(byocCall);
-  assert.equal('account_id' in byocCall.params, false);
-
   const saCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/accounts/service-account');
   assert.ok(saCall);
   assert.equal('account_id' in saCall.params, false);
+  assert.ok(saCall.params.service_account_json.includes('service_account'));
+  assert.equal(createdAccount.id, 'sa-1');
 
   const pickerCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/picker/import');
   assert.ok(pickerCall);
   assert.equal('account' in pickerCall.params, false);
   assert.equal('access_token' in pickerCall.params, false);
-});
-
-test('ui: self-hosted Proxmox OAuth relay config tab & same-origin callback page work end-to-end', () => {
-  const { sandbox, apiCalls } = loadWebUiWithMocks();
-
-  const wizard = sandbox.Ext.create('PVE.gdrive.AuthWizardWindow', {});
-  const tabs = wizard.items[0].items;
-  assert.equal(tabs.length, 4);
-  assert.equal(tabs[3].title, 'Host OAuth Relay in Proxmox');
-
-  // Verify GET relay/config was requested on init
-  assert.ok(apiCalls.some((c) => c.url === '/api2/json/gdrive/relay/config' && c.method === 'GET'));
-
-  // Configure self-hosted relay in Tab 4
-  const selfItems = tabs[3].items;
-  const selfEnabled = selfItems[1];
-  const selfClientId = selfItems[2];
-  const selfClientSecret = selfItems[3];
-  const selfRedirectUri = selfItems[4];
-  const selfSaveBtn = selfItems[7].items[0];
-
-  assert.equal(
-    selfRedirectUri.getValue(),
-    'https://pve.example.com:8006/pve2/gdrive-oauth-callback.html'
-  );
-  selfEnabled.setValue(true);
-  selfClientId.setValue('my-pve-client-id');
-  selfClientSecret.setValue('my-pve-client-secret');
-  selfSaveBtn.handler();
-
-  const saveCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/relay/config' && c.method === 'POST');
-  assert.ok(saveCall);
-  assert.equal(saveCall.params.enabled, 1);
-  assert.equal(saveCall.params.client_id, 'my-pve-client-id');
-  assert.equal(saveCall.params.client_secret, 'my-pve-client-secret');
-
-  // Trigger Tab 1 Sign-In and simulate same-origin callback postMessage (pve-gdrive-oauth-code)
-  const signInBtn = tabs[0].items[3].items[0];
-  signInBtn.handler();
-
-  const startCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/oauth/start' && c.params.mode === 'relay');
-  assert.ok(startCall);
-  assert.equal(startCall.params.ui_origin, 'https://pve.example.com:8006');
-  assert.equal(typeof sandbox._listeners.message, 'function');
-
-  sandbox._listeners.message({
-    data: { type: 'pve-gdrive-oauth-code', state: 'st-start-1', code: 'self-hosted-auth-code' },
-  });
-
-  const finishCodeCall = apiCalls.find(
-    (c) => c.url === '/api2/json/gdrive/oauth/finish' && c.params.state === 'st-start-1'
-  );
-  assert.ok(finishCodeCall);
-  assert.equal(finishCodeCall.params.code, 'self-hosted-auth-code');
-
-  // Verify static callback HTML posts code back to window.opener same-origin without XSS
-  const html = fs.readFileSync(path.join(ROOT_DIR, 'ui/gdrive-oauth-callback.html'), 'utf8');
-  const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
-  assert.ok(scriptMatch);
-
-  const elements = {
-    status: { textContent: '', className: '' },
-    detail: { textContent: '' },
-    fallback: { className: 'hidden' },
-    payloadBox: { value: '', select() {} },
-    copyBtn: { textContent: 'Copy', addEventListener() {} },
-    closeBtn: { addEventListener() {} },
-  };
-  const posted = [];
-  const cbSandbox = {
-    URLSearchParams,
-    setTimeout() {},
-    document: {
-      getElementById: (id) => elements[id],
-      execCommand() {},
-    },
-    navigator: {},
-    window: {
-      location: {
-        origin: 'https://pve.example.com:8006',
-        search: '?code=4%2F0TestCode&state=st-cb-1',
-      },
-      opener: {
-        postMessage(msg, targetOrigin) {
-          posted.push({ msg, targetOrigin });
-        },
-      },
-      close() {},
-    },
-  };
-  vm.runInNewContext(scriptMatch[1], cbSandbox, { filename: 'ui/gdrive-oauth-callback.html' });
-  assert.equal(posted.length, 1);
-  assert.equal(posted[0].targetOrigin, 'https://pve.example.com:8006');
-  assert.equal(posted[0].msg.type, 'pve-gdrive-oauth-code');
-  assert.equal(posted[0].msg.code, '4/0TestCode');
-  assert.equal(posted[0].msg.state, 'st-cb-1');
-  assert.equal(elements.payloadBox.value, '4/0TestCode');
 });
 
 // ---------------------------------------------------------------------------

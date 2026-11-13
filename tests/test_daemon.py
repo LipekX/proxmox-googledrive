@@ -29,7 +29,7 @@ from pve_gdrive.config import Config, atomic_write_json, ensure_dir  # noqa: E40
 from pve_gdrive.daemon import DaemonApp  # noqa: E402
 from pve_gdrive.gdrive import DriveClient  # noqa: E402
 from pve_gdrive.ipc import ipc_request  # noqa: E402
-from pve_gdrive.oauth import OAuthManager, generate_pkce  # noqa: E402
+from pve_gdrive.oauth import OAuthManager  # noqa: E402
 from pve_gdrive.vfs import VFSSupervisor, compute_cache_cap, parse_size  # noqa: E402
 
 
@@ -488,13 +488,11 @@ class DaemonTestBase(unittest.TestCase):
         self.config = Config(
             accounts_dir=os.path.join(self.base, "accounts"),
             storages_dir=os.path.join(self.base, "storages"),
-            relay_config_path=os.path.join(self.base, "relay.json"),
             sock_path=os.path.join(self.base, "run", "pve-gdrived.sock"),
             run_dir=os.path.join(self.base, "run", "pve-gdrive"),
             cache_dir=os.path.join(self.base, "cache"),
             mnt_base=os.path.join(self.base, "mnt"),
             google_token_url=f"{self.mock_url}/token",
-            google_userinfo_url=f"{self.mock_url}/oauth2/v2/userinfo",
             drive_api_base=f"{self.mock_url}/drive/v3",
             drive_upload_base=f"{self.mock_url}/upload/drive/v3",
             rclone_bin=self.mock_rclone,
@@ -517,138 +515,55 @@ class TestConfigAndPermissions(DaemonTestBase):
         self.assertEqual(dir_mode, 0o700)
         self.assertEqual(file_mode, 0o600)
 
+    def test_pmxcfs_skips_chmod_on_etc_pve(self) -> None:
+        with mock.patch("os.makedirs"), mock.patch("os.chmod") as mock_chmod:
+            ensure_dir("/etc/pve/priv/gdrive/accounts", mode=0o700)
+            mock_chmod.assert_not_called()
+
 
 class TestOAuthAndServiceAccount(DaemonTestBase):
-    def test_pkce_generator(self) -> None:
-        verifier, challenge = generate_pkce()
-        self.assertGreaterEqual(len(verifier), 43)
-        expected = base64.urlsafe_b64encode(
-            hashlib.sha256(verifier.encode("ascii")).digest()
-        ).rstrip(b"=").decode("ascii")
-        self.assertEqual(challenge, expected)
-
-    def test_relay_flow_and_in_memory_refresh_without_disk_rewrite(self) -> None:
+    def test_service_account_in_memory_refresh_without_disk_rewrite(self) -> None:
+        priv_pem, _pub_path = _generate_test_rsa_keypair(self.base)
         oauth = OAuthManager(self.config)
-        started = oauth.start_oauth(mode="relay", scope="drive.file")
-        self.assertEqual(started["redirect_uri"], "https://auth.pve-gdrive.org/oauth/callback")
-        self.assertIn(
-            urllib.parse.quote("https://auth.pve-gdrive.org/oauth/callback", safe=""),
-            started["auth_url"],
+        acct = oauth.add_service_account(
+            {
+                "client_email": "pve-sa@example.iam.gserviceaccount.com",
+                "private_key": priv_pem,
+                "private_key_id": "key-1",
+                "token_uri": f"{self.mock_url}/token",
+            }
         )
-        # Relay Worker exchanges code with client_secret and no code_verifier,
-        # so relay mode must NOT attach code_challenge to auth_url.
-        self.assertNotIn("code_challenge", started["auth_url"])
-        self.assertNotIn("code_challenge", started)
-
-        b64_tokens = base64.urlsafe_b64encode(
-            json.dumps(
-                {
-                    "access_token": "relay-access-1",
-                    "refresh_token": "relay-refresh-1",
-                    "expires_in": 3600,
-                }
-            ).encode("utf-8")
-        ).decode("ascii")
-        acct = oauth.finish_oauth(state=started["state"], tokens_json=b64_tokens)
-        self.assertEqual(acct["email"], "admin@example.org")
-        self.assertEqual(acct["mode"], "relay")
+        self.assertEqual(acct["mode"], "service_account")
+        self.assertEqual(acct["email"], "pve-sa@example.iam.gserviceaccount.com")
 
         profile_path = os.path.join(self.config.accounts_dir, f"{acct['id']}.json")
         mtime_before = os.stat(profile_path).st_mtime_ns
         with open(profile_path, "r", encoding="utf-8") as fh:
             raw_before = fh.read()
 
-        # Cached token returned without network refresh
-        self.assertEqual(oauth.get_access_token(acct["id"]), "relay-access-1")
-        self.assertEqual(self.state.refresh_count, 0)
+        # First call exchanges JWT for access token and caches in memory
+        tok1 = oauth.get_access_token(acct["id"])
+        self.assertEqual(tok1, "sa-access-token-1")
+        self.assertEqual(len(self.state.token_requests), 1)
 
-        # Force token expiry in memory and verify refresh does NOT touch pmxcfs profile file
+        # Second call returns cached token without network call
+        tok2 = oauth.get_access_token(acct["id"])
+        self.assertEqual(tok2, "sa-access-token-1")
+        self.assertEqual(len(self.state.token_requests), 1)
+
+        # Force expiry in memory and verify refresh does NOT touch pmxcfs profile file
         oauth._token_cache[acct["id"]]["expires_at"] = time.time() - 10
-        refreshed = oauth.get_access_token(acct["id"])
-        self.assertEqual(refreshed, "refreshed-tok-1")
-        self.assertEqual(self.state.refresh_count, 1)
+        tok3 = oauth.get_access_token(acct["id"])
+        self.assertEqual(tok3, "sa-access-token-1")
+        self.assertEqual(len(self.state.token_requests), 2)
         self.assertEqual(os.stat(profile_path).st_mtime_ns, mtime_before)
         with open(profile_path, "r", encoding="utf-8") as fh:
             self.assertEqual(fh.read(), raw_before)
 
-        # Verify public listing strips secrets
+        # Verify public listing strips private_key
         listed = oauth.list_accounts()
         self.assertEqual(len(listed), 1)
-        self.assertNotIn("refresh_token", listed[0])
-
-    def test_self_hosted_relay_config_and_oauth_flow(self) -> None:
-        oauth = OAuthManager(self.config)
-        initial = oauth.get_relay_config()
-        self.assertFalse(initial["enabled"])
-        self.assertFalse(initial["has_client_secret"])
-
-        saved = oauth.save_relay_config(
-            enabled=True,
-            client_id="self-hosted-cid",
-            client_secret="self-hosted-secret",
-            redirect_uri="",
-            scope="drive",
-        )
-        self.assertTrue(saved["enabled"])
-        self.assertEqual(saved["client_id"], "self-hosted-cid")
-        self.assertTrue(saved["has_client_secret"])
-        self.assertNotIn("client_secret", saved)
-        self.assertEqual(saved["scope"], "drive")
-
-        # Updating without client_secret preserves existing secret
-        updated = oauth.save_relay_config(
-            enabled=True,
-            client_id="self-hosted-cid",
-            client_secret="",
-            redirect_uri="https://pve.example.com:8006/pve2/gdrive-oauth-callback.html",
-            scope="drive.file",
-        )
-        self.assertTrue(updated["has_client_secret"])
-        self.assertEqual(
-            updated["redirect_uri"],
-            "https://pve.example.com:8006/pve2/gdrive-oauth-callback.html",
-        )
-
-        # mode="relay" automatically uses self-hosted Proxmox relay when enabled
-        started = oauth.start_oauth(
-            mode="relay",
-            ui_origin="https://pve.example.com:8006",
-        )
-        self.assertEqual(started["relay_source"], "self_hosted")
-        self.assertEqual(
-            started["redirect_uri"],
-            "https://pve.example.com:8006/pve2/gdrive-oauth-callback.html",
-        )
-        self.assertIn("code_challenge=", started["auth_url"])
-
-        acct = oauth.finish_oauth(state=started["state"], code="self-code-42")
-        self.assertEqual(acct["mode"], "pve_self")
-        self.assertEqual(acct["email"], "admin@example.org")
-        last_post = self.state.token_requests[-1]
-        self.assertEqual(last_post["client_id"], "self-hosted-cid")
-        self.assertEqual(last_post["client_secret"], "self-hosted-secret")
-        self.assertTrue(last_post.get("code_verifier"))
-
-    def test_byoc_code_exchange_sends_pkce_verifier(self) -> None:
-        oauth = OAuthManager(self.config)
-        started = oauth.start_oauth(
-            mode="byoc",
-            client_id="my-byoc-client",
-            client_secret="my-byoc-secret",
-            scope="drive",
-            redirect_uri="http://127.0.0.1:9999/cb",
-        )
-        self.assertIn("code_challenge_method=S256", started["auth_url"])
-        self.assertIn("code_challenge", started)
-        acct = oauth.finish_oauth(state=started["state"], code="auth-code-42")
-        self.assertEqual(acct["mode"], "byoc")
-        self.assertEqual(acct["scope"], "drive")
-        self.assertEqual(len(self.state.token_requests), 1)
-        req = self.state.token_requests[0]
-        self.assertEqual(req["code"], "auth-code-42")
-        self.assertEqual(req["client_id"], "my-byoc-client")
-        self.assertEqual(req["client_secret"], "my-byoc-secret")
-        self.assertIn("code_verifier", req)
+        self.assertNotIn("private_key", listed[0])
 
     def test_service_account_jwt_signed_and_verified_by_openssl(self) -> None:
         priv_pem, pub_path = _generate_test_rsa_keypair(self.base)
@@ -686,10 +601,13 @@ class TestOAuthAndServiceAccount(DaemonTestBase):
 
 class TestDriveClient(DaemonTestBase):
     def _create_acct(self, oauth: OAuthManager) -> str:
-        s = oauth.start_oauth(mode="relay")
-        acct = oauth.finish_oauth(
-            state=s["state"],
-            tokens_json={"access_token": "tok-1", "refresh_token": "ref-1", "expires_in": 3600},
+        priv_pem, _ = _generate_test_rsa_keypair(self.base)
+        acct = oauth.add_service_account(
+            {
+                "client_email": "drive-sa@example.iam.gserviceaccount.com",
+                "private_key": priv_pem,
+                "token_uri": f"{self.mock_url}/token",
+            }
         )
         return acct["id"]
 
@@ -802,10 +720,13 @@ class TestVFSAndRcloneConfig(DaemonTestBase):
         drive = DriveClient(self.config, oauth)
         vfs = VFSSupervisor(self.config, oauth, drive)
 
-        s = oauth.start_oauth(mode="relay")
-        acct = oauth.finish_oauth(
-            state=s["state"],
-            tokens_json={"access_token": "tok-1", "refresh_token": "ref-1", "expires_in": 3600},
+        priv_pem, _ = _generate_test_rsa_keypair(self.base)
+        acct = oauth.add_service_account(
+            {
+                "client_email": "vfs-sa@example.iam.gserviceaccount.com",
+                "private_key": priv_pem,
+                "token_uri": f"{self.mock_url}/token",
+            }
         )
         vfs.init_storage(
             storeid="gdrive-enc",
@@ -867,56 +788,25 @@ class TestUnixSocketIPCAndCLI(DaemonTestBase):
             self.assertEqual(code, 200)
             self.assertTrue(health["ok"])
 
-            # GET/POST /v1/relay/config
-            code, r_cfg = ipc_request(self.config.sock_path, "GET", "/v1/relay/config")
-            self.assertEqual(code, 200)
-            self.assertFalse(r_cfg["enabled"])
-
-            code, r_saved = ipc_request(
+            # Service Account registration
+            priv_pem, _ = _generate_test_rsa_keypair(self.base)
+            code, sa_res = ipc_request(
                 self.config.sock_path,
                 "POST",
-                "/v1/relay/config",
+                "/v1/accounts/service-account",
                 {
-                    "enabled": True,
-                    "client_id": "ipc-relay-cid",
-                    "client_secret": "ipc-relay-sec",
-                    "scope": "drive.file",
+                    "account_id": "sa-ipc",
+                    "service_account_json": json.dumps(
+                        {
+                            "client_email": "ipc-sa@example.iam.gserviceaccount.com",
+                            "private_key": priv_pem,
+                            "token_uri": f"{self.mock_url}/token",
+                        }
+                    ),
                 },
             )
             self.assertEqual(code, 200)
-            self.assertTrue(r_saved["enabled"])
-            self.assertTrue(r_saved["has_client_secret"])
-            self.assertNotIn("client_secret", r_saved)
-
-            # Disable again so external relay flow test below runs as expected
-            code, r_dis = ipc_request(
-                self.config.sock_path,
-                "POST",
-                "/v1/relay/config",
-                {"enabled": False},
-            )
-            self.assertEqual(code, 200)
-            self.assertFalse(r_dis["enabled"])
-
-            # OAuth start + finish
-            code, start_res = ipc_request(
-                self.config.sock_path,
-                "POST",
-                "/v1/oauth/start",
-                {"mode": "relay", "scope": "drive.file"},
-            )
-            self.assertEqual(code, 200)
-            code, fin_res = ipc_request(
-                self.config.sock_path,
-                "POST",
-                "/v1/oauth/finish",
-                {
-                    "state": start_res["state"],
-                    "tokens_json": {"access_token": "tok-ipc", "refresh_token": "ref-ipc", "expires_in": 3600},
-                },
-            )
-            self.assertEqual(code, 200)
-            acct_id = fin_res["account"]["id"]
+            acct_id = sa_res["account"]["id"]
 
             # GET /v1/accounts
             code, accts = ipc_request(self.config.sock_path, "GET", "/v1/accounts")

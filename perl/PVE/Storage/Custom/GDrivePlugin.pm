@@ -168,11 +168,14 @@ sub _write_crypt_passphrase {
     my ($storeid, $passphrase) = @_;
     my $path = _crypt_file_path($storeid);
     my $dir = dirname($path);
+    my $is_pmxcfs = ($path =~ m!^/etc/pve(?:/|$)!);
     make_path($dir, { mode => 0700 }) unless -d $dir;
-    chmod 0700, $dir;
+    chmod 0700, $dir unless $is_pmxcfs;
 
     my ($fh, $tmp) = tempfile('.crypt.XXXXXX', DIR => $dir, UNLINK => 0);
-    chmod 0600, $tmp or die "chmod failed on $tmp: $!\n";
+    if (!$is_pmxcfs) {
+        chmod 0600, $tmp or die "chmod failed on $tmp: $!\n";
+    }
     my $json = encode_json({
         storeid    => $storeid,
         passphrase => $passphrase,
@@ -183,7 +186,7 @@ sub _write_crypt_passphrase {
         unlink($tmp);
         die "rename $tmp -> $path failed: $!\n";
     };
-    chmod 0600, $path;
+    chmod 0600, $path unless $is_pmxcfs;
     return $path;
 }
 
