@@ -282,7 +282,7 @@ do_install() {
 
     log_info "Updating APT package lists and installing $deb_name..."
     DEBIAN_FRONTEND=noninteractive apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_path"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall "$deb_path"
 
     if ! systemctl is-active --quiet pve-gdrived.service; then
         systemctl status pve-gdrived.service --no-pager || true

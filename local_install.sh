@@ -153,6 +153,32 @@ do_uninstall() {
     warn_if_cluster
 }
 
+BACKUP_ROOT="/var/backups/pve-storage-gdrive"
+
+backup_proxmox_files() {
+    local ts snap_dir
+    ts="$(date +%Y%m%d-%H%M%S)"
+    snap_dir="$BACKUP_ROOT/$ts"
+    install -d -m 0700 "$BACKUP_ROOT" "$snap_dir"
+
+    local tpl="/usr/share/pve-manager/index.html.tpl"
+    if [[ -f "$tpl" ]]; then
+        if ! grep -Fq "# BEGIN pve-storage-gdrive" "$tpl" && [[ ! -f "$BACKUP_ROOT/index.html.tpl.orig" ]]; then
+            cp -p "$tpl" "$BACKUP_ROOT/index.html.tpl.orig"
+            log_info "Saved pristine original template to $BACKUP_ROOT/index.html.tpl.orig"
+        fi
+        cp -p "$tpl" "$snap_dir/index.html.tpl"
+    fi
+
+    if [[ -f /etc/vzdump.conf ]]; then
+        cp -p /etc/vzdump.conf "$snap_dir/vzdump.conf"
+    fi
+    if [[ -f /etc/pve/storage.cfg ]]; then
+        cp -p /etc/pve/storage.cfg "$snap_dir/storage.cfg"
+    fi
+    log_info "Pre-install backup saved to $snap_dir"
+}
+
 do_install() {
     check_proxmox_host
 
@@ -183,9 +209,11 @@ do_install() {
     log_info "Verifying SHA-256 checksum for $deb_name..."
     (cd "$dist_dir" && sha256sum -c SHA256SUMS)
 
+    backup_proxmox_files
+
     log_info "Updating APT package lists and installing $deb_path..."
     DEBIAN_FRONTEND=noninteractive apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_path"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall "$deb_path"
 
     if ! systemctl is-active --quiet pve-gdrived.service; then
         systemctl status pve-gdrived.service --no-pager || true
