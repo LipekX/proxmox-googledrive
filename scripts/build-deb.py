@@ -58,9 +58,16 @@ def parse_binary_control_stanza(control_path: Path) -> dict[str, str]:
     if current:
         stanzas.append(current)
 
+    source_defaults: dict[str, str] = {}
     for stanza in stanzas:
+        if "Source" in stanza:
+            for k in ("Maintainer", "Section", "Priority", "Homepage"):
+                if k in stanza:
+                    source_defaults[k] = stanza[k]
         if "Package" in stanza:
-            return stanza
+            merged = dict(source_defaults)
+            merged.update(stanza)
+            return merged
 
     raise ValueError(f"No binary Package stanza found in {control_path}")
 

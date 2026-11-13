@@ -309,7 +309,6 @@ sub options {
         content        => { optional => 1 },
         shared         => { optional => 1 },
         'prune-backups' => { optional => 1 },
-        maxfiles       => { optional => 1 },
     };
 }
 

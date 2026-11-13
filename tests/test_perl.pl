@@ -349,7 +349,7 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
         ok(exists $props->{$p}, "properties() defines $p");
         ok(exists $opts->{$p}, "options() includes $p");
     }
-    for my $std (qw(path nodes disable content shared prune-backups maxfiles)) {
+    for my $std (qw(path nodes disable content shared prune-backups)) {
         ok(exists $opts->{$std}, "options() includes standard option $std");
     }
     is($props->{cache_dir}{default}, '/var/cache/pve-gdrive', 'cache_dir defaults to /var/cache/pve-gdrive');
