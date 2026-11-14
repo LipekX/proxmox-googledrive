@@ -380,14 +380,15 @@
                 data: [],
             });
 
+            var MY_DRIVE_VAL = '__my_drive__';
             var driveStore = Ext.create('Ext.data.Store', {
-                fields: ['id', 'name'],
-                data: [{ id: '', name: _('My Drive') }],
+                fields: ['drive_id', 'name'],
+                data: [{ drive_id: MY_DRIVE_VAL, name: _('My Drive') }],
             });
 
             var loadDrives = function (accountId) {
                 if (!accountId) {
-                    driveStore.setData([{ id: '', name: _('My Drive') }]);
+                    driveStore.setData([{ drive_id: MY_DRIVE_VAL, name: _('My Drive') }]);
                     return;
                 }
                 Utils.apiRequest({
@@ -396,11 +397,11 @@
                     success: function (response) {
                         var drives =
                             (response.result && response.result.data && response.result.data.drives) || [];
-                        var items = [{ id: '', name: _('My Drive') }];
+                        var items = [{ drive_id: MY_DRIVE_VAL, name: _('My Drive') }];
                         for (var i = 0; i < drives.length; i += 1) {
                             if (drives[i] && drives[i].id) {
                                 items.push({
-                                    id: drives[i].id,
+                                    drive_id: drives[i].id,
                                     name: drives[i].name || drives[i].id,
                                 });
                             }
@@ -408,7 +409,7 @@
                         driveStore.setData(items);
                     },
                     failure: function () {
-                        driveStore.setData([{ id: '', name: _('My Drive') }]);
+                        driveStore.setData([{ drive_id: MY_DRIVE_VAL, name: _('My Drive') }]);
                     },
                 });
             };
@@ -464,11 +465,11 @@
                 name: 'drive_id',
                 fieldLabel: _('Shared Drive'),
                 store: driveStore,
-                valueField: 'id',
+                valueField: 'drive_id',
                 displayField: 'name',
                 queryMode: 'local',
                 editable: false,
-                value: '',
+                value: MY_DRIVE_VAL,
             });
 
             var passphraseField = Ext.create('Ext.form.field.Text', {
@@ -625,6 +626,9 @@
                 copy.async_upload === '1' ||
                 copy.async_upload === true;
             copy.wait_for_upload = !isAsync;
+            if (!copy.drive_id) {
+                copy.drive_id = '__my_drive__';
+            }
             if (copy.account && typeof me._loadDrives === 'function') {
                 me._loadDrives(copy.account);
             }
@@ -654,7 +658,7 @@
             if (!out.encrypt || (!me.isCreate && !out.crypt_passphrase)) {
                 delete out.crypt_passphrase;
             }
-            if (!out.drive_id) {
+            if (!out.drive_id || out.drive_id === '__my_drive__') {
                 delete out.drive_id;
             }
 
