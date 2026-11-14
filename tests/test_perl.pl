@@ -466,7 +466,7 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
     PVE::RPCEnvironment->set_mock_permissions({ '*' => 1 }, 'root@pam');
 
     my $idx = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'GET', '');
-    is(scalar(@$idx), 3, 'GET "" index returns 3 subdirs');
+    is(scalar(@$idx), 4, 'GET "" index returns 4 subdirs');
 
     my $accts = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'GET', 'accounts');
     is($accts->{accounts}[0]{email}, 'user@example.com', 'GET accounts returns daemon accounts');

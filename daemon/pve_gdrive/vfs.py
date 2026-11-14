@@ -766,7 +766,10 @@ class VFSSupervisor:
         try:
             vfs_stats = rc_call(rc_sock, "/vfs/stats", timeout=timeout)
             core_stats = rc_call(rc_sock, "/core/stats", timeout=timeout)
-            queue_data = rc_call(rc_sock, "/vfs/queue", timeout=timeout)
+            try:
+                queue_data = rc_call(rc_sock, "/vfs/queue", timeout=timeout)
+            except Exception:
+                queue_data = {"queue": []}
             return (
                 True,
                 vfs_stats,
@@ -978,7 +981,10 @@ class VFSSupervisor:
 
             vfs_stats = rc_call(rc_sock, "/vfs/stats", timeout=2.0)
             core_stats = rc_call(rc_sock, "/core/stats", timeout=2.0)
-            queue_data = rc_call(rc_sock, "/vfs/queue", timeout=2.0)
+            try:
+                queue_data = rc_call(rc_sock, "/vfs/queue", timeout=2.0)
+            except Exception:
+                queue_data = {"queue": []}
 
             queue_items = list(queue_data.get("queue") or [])
             transferring = list(core_stats.get("transferring") or [])
