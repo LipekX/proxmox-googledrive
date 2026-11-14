@@ -915,30 +915,42 @@
                     importBtn.setHidden(true);
                     return;
                 }
+                var applyAccounts = function (accounts) {
+                    var storageAccountId =
+                        me.storageInfo && me.storageInfo.account
+                            ? me.storageInfo.account
+                            : null;
+                    var matched = null;
+                    for (var i = 0; i < accounts.length; i += 1) {
+                        if (!storageAccountId || accounts[i].id === storageAccountId) {
+                            matched = accounts[i];
+                            break;
+                        }
+                    }
+                    if (matched) {
+                        me._gdriveAccount = matched.id;
+                        var scopeStr = String(matched.scope || '');
+                        var isDriveFile =
+                            scopeStr.indexOf('drive.file') !== -1 || scopeStr === '';
+                        importBtn.setHidden(!isDriveFile);
+                    }
+                };
+                var now = Date.now();
+                if (
+                    PVE.gdrive._accountsCache &&
+                    now - PVE.gdrive._accountsCache.ts < 60000
+                ) {
+                    applyAccounts(PVE.gdrive._accountsCache.accounts);
+                    return;
+                }
                 Utils.apiRequest({
                     url: '/api2/json/gdrive/accounts',
                     method: 'GET',
                     success: function (response) {
                         var accounts =
                             (response.result && response.result.data && response.result.data.accounts) || [];
-                        var storageAccountId =
-                            me.storageInfo && me.storageInfo.account
-                                ? me.storageInfo.account
-                                : null;
-                        var matched = null;
-                        for (var i = 0; i < accounts.length; i += 1) {
-                            if (!storageAccountId || accounts[i].id === storageAccountId) {
-                                matched = accounts[i];
-                                break;
-                            }
-                        }
-                        if (matched) {
-                            me._gdriveAccount = matched.id;
-                            var scopeStr = String(matched.scope || '');
-                            var isDriveFile =
-                                scopeStr.indexOf('drive.file') !== -1 || scopeStr === '';
-                            importBtn.setHidden(!isDriveFile);
-                        }
+                        PVE.gdrive._accountsCache = { ts: Date.now(), accounts: accounts };
+                        applyAccounts(accounts);
                     },
                 });
             };
@@ -954,7 +966,12 @@
             refreshQueueStatus();
             checkPickerEligibility();
 
-            me._gdriveQueueTimer = global.setInterval(refreshQueueStatus, 10000);
+            me._gdriveQueueTimer = global.setInterval(function () {
+                if (typeof me.isVisible === 'function' && !me.isVisible(true)) {
+                    return;
+                }
+                refreshQueueStatus();
+            }, 10000);
             me.on('destroy', function () {
                 if (me._gdriveQueueTimer) {
                     global.clearInterval(me._gdriveQueueTimer);

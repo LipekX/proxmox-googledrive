@@ -279,6 +279,7 @@ class VFSSupervisor:
         self._mounts: Dict[str, _ManagedMount] = {}
         self._stop_event = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
+        self._rc_queue_supported: Optional[bool] = None
 
     def _storage_meta_path(self, storeid: str) -> str:
         safe = validate_store_id(storeid)
@@ -525,6 +526,11 @@ class VFSSupervisor:
             cap_rclone,
             "--vfs-cache-max-age",
             "1h",
+            "--dir-cache-time",
+            "30m",
+            "--vfs-fast-fingerprint",
+            "--drive-chunk-size",
+            "64M",
             "--allow-other",
             "--rc",
             "--rc-addr",
@@ -785,10 +791,18 @@ class VFSSupervisor:
         try:
             vfs_stats = rc_call(rc_sock, "/vfs/stats", timeout=timeout)
             core_stats = rc_call(rc_sock, "/core/stats", timeout=timeout)
-            try:
-                queue_data = rc_call(rc_sock, "/vfs/queue", timeout=timeout)
-            except Exception:
-                queue_data = {"queue": []}
+            if self._rc_queue_supported is False:
+                queue_data: Dict[str, Any] = {"queue": []}
+            else:
+                try:
+                    queue_data = rc_call(rc_sock, "/vfs/queue", timeout=timeout)
+                    self._rc_queue_supported = True
+                except RuntimeError as exc:
+                    if "HTTP 404" in str(exc):
+                        self._rc_queue_supported = False
+                    queue_data = {"queue": []}
+                except Exception:
+                    queue_data = {"queue": []}
             return (
                 True,
                 vfs_stats,
