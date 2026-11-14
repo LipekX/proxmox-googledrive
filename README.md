@@ -11,32 +11,32 @@ Mount your Google **My Drive** or **Shared Drives** as a first-class Proxmox sto
 Run on each Proxmox VE node as `root`:
 
 ```bash
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)"
+bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)"
 ```
 
 ### Installer Options
 
 ```bash
 # Install a specific release version
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)" -- --version 0.1.0-1
+bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --version 0.1.0-2
 
 # Install from a custom .deb URL (still verifies SHA256SUMS)
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)" -- --deb-url https://example.com/pve-storage-gdrive_0.1.0-1_all.deb
+bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --deb-url https://example.com/pve-storage-gdrive_0.1.0-2_all.deb
 
 # Non-interactive install
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)" -- --yes
+bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --yes
 
 # Uninstall (preserves /etc/pve/priv/gdrive credentials and remote Drive files)
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive-storage.sh)" -- --uninstall
+bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --uninstall
 ```
 
 ### Local Install (from `git clone`)
 
-If the repository is private or you want to build and install directly from a local checkout:
+If you want to build and install directly from a local checkout:
 
 ```bash
-git clone https://git.lipa.run/lipa/proxmox-gdrive-storage.git
-cd proxmox-gdrive-storage
+git clone https://github.com/LipekX/proxmox-gdrive.git
+cd proxmox-gdrive
 sudo ./local_install.sh
 ```
 
@@ -143,6 +143,16 @@ dpkg-buildpackage -us -uc -b
 # Clean build artifacts
 make clean
 ```
+
+---
+
+## Disclaimers
+
+- **Unofficial Community Project**: `pve-storage-gdrive` is an independent open-source plugin and is **not affiliated with, endorsed by, or supported by Proxmox Server Solutions GmbH or Google LLC**. "Proxmox" and "Google Drive" are trademarks of their respective owners.
+- **No Warranty / Backup Responsibility**: This software is provided **AS-IS** under the `AGPL-3.0-or-later` license without warranty of any kind. Cloud FUSE mounts depend on internet connectivity, Google Drive API availability/rate limits, and `rclone`. **Always test backup restores periodically** and maintain independent local or offsite backups for critical workloads.
+- **Client-Side Encryption (`rclone crypt`)**: If you enable encryption, you are solely responsible for backing up your passphrase (also stored in `/etc/pve/priv/gdrive/storages/<storeid>.crypt.json`). Lost passphrases cannot be recovered.
+- **Shared OAuth Client & API Quotas**: The built-in Easy Google Sign-In flow uses `rclone`'s public desktop OAuth client (`drive` scope), whose Google Drive API request quota is shared across users. For heavy production workloads or high request rates, consider using your own Google Cloud OAuth client or Service Account.
+- **Cluster & Credential Security**: Account tokens and encryption passphrases are stored with `0600` permissions in `/etc/pve/priv/gdrive/` (replicated across cluster nodes via `pmxcfs`). Anyone with `root` access on a cluster node can access those credentials.
 
 ---
 

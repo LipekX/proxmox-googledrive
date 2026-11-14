@@ -1,6 +1,6 @@
 [Unit]
 Description=Proxmox VE Google Drive Storage Daemon
-Documentation=https://github.com/lipa/pve-storage-gdrive
+Documentation=https://github.com/LipekX/proxmox-gdrive
 After=network-online.target pve-cluster.service
 Wants=network-online.target
 
