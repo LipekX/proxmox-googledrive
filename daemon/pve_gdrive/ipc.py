@@ -185,6 +185,33 @@ class IPCRequestHandler(BaseHTTPRequestHandler):
                 enriched.append(item)
             return 200, {"accounts": enriched}
 
+        # POST /v1/oauth/start
+        if method == "POST" and sub == ["oauth", "start"]:
+            res = app.oauth.start_oauth_login(
+                client_id=body.get("client_id"),
+                client_secret=body.get("client_secret"),
+                redirect_uri=body.get("redirect_uri"),
+                scope=str(body.get("scope") or "drive"),
+            )
+            return 200, res
+
+        # POST /v1/oauth/finish
+        if method == "POST" and sub in (["oauth", "finish"], ["accounts", "oauth"]):
+            account = app.oauth.finish_oauth_login(
+                code_or_token=(
+                    body.get("code")
+                    or body.get("token")
+                    or body.get("payload")
+                    or body.get("redirect_url")
+                ),
+                state=body.get("state"),
+                account_id=body.get("account_id"),
+                client_id=body.get("client_id"),
+                client_secret=body.get("client_secret"),
+                redirect_uri=body.get("redirect_uri"),
+            )
+            return 200, {"account": account}
+
         # POST /v1/accounts/service-account
         if method == "POST" and sub == ["accounts", "service-account"]:
             account = app.oauth.add_service_account(

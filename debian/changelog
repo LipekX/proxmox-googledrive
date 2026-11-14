@@ -1,3 +1,14 @@
+pve-storage-gdrive (0.1.0-2) bookworm; urgency=medium
+
+  * Rework Google authentication to support simple one-time OAuth2 login in
+    the CLI (`pve-gdrive login` and during `local_install.sh` / `install.sh`)
+    and Web UI without requiring Service Account IAM or Google Cloud setup.
+  * Fix HTTP 501 on /gdrive/* API routes by registering PVE::API2::GDrive in
+    PVE/API2.pm via overlay-hook.sh, marking IPC routes protected => 1 so
+    pveproxy forwards to pvedaemon, and bumping MAX_APIVER for PVE 9.x.
+
+ -- Proxmox GDrive Contributors <maintainers@lipa.run>  Sat, 14 Nov 2026 16:54:00 +0000
+
 pve-storage-gdrive (0.1.0-1) bookworm; urgency=medium
 
   * Initial release of pve-storage-gdrive for Proxmox VE 8.x and 9.x.

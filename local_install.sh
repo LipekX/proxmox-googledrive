@@ -170,6 +170,15 @@ backup_proxmox_files() {
         cp -p "$tpl" "$snap_dir/index.html.tpl"
     fi
 
+    local api2_pm="/usr/share/perl5/PVE/API2.pm"
+    if [[ -f "$api2_pm" ]]; then
+        if ! grep -Fq "# BEGIN pve-storage-gdrive" "$api2_pm" && [[ ! -f "$BACKUP_ROOT/API2.pm.orig" ]]; then
+            cp -p "$api2_pm" "$BACKUP_ROOT/API2.pm.orig"
+            log_info "Saved pristine original API2.pm to $BACKUP_ROOT/API2.pm.orig"
+        fi
+        cp -p "$api2_pm" "$snap_dir/API2.pm"
+    fi
+
     if [[ -f /etc/vzdump.conf ]]; then
         cp -p /etc/vzdump.conf "$snap_dir/vzdump.conf"
     fi
@@ -223,13 +232,27 @@ do_install() {
     log_info "pve-gdrived.service is active and running."
     warn_if_cluster
 
+    if [[ -t 0 && "$ASSUME_YES" -eq 0 ]]; then
+        echo
+        local login_reply
+        read -r -p "Sign in to your Google Drive account now in the CLI? [Y/n] " login_reply
+        case "$login_reply" in
+            [nN]|[nN][oO])
+                log_info "Skipped CLI login. You can run 'pve-gdrive login' anytime or sign in from the Web UI."
+                ;;
+            *)
+                pve-gdrive login || log_warn "CLI login did not complete. You can re-run 'pve-gdrive login' anytime."
+                ;;
+        esac
+    fi
+
     echo
     log_info "Local installation complete!"
     log_info "Next steps:"
-    echo "  1. Open Proxmox Web UI -> Datacenter -> Storage -> Add -> Google Drive."
-    echo "  2. Click 'Configure Service Account' and upload or paste your Google Service Account JSON key."
-    echo "     (Share your Google Shared Drive or Drive folder with the Service Account email.)"
-    echo "  3. CLI status check: pve-gdrive status"
+    echo "  1. Sign in from CLI anytime with: pve-gdrive login"
+    echo "  2. Open Proxmox Web UI -> Datacenter -> Storage -> Add -> Google Drive."
+    echo "  3. Select your Google account (or click 'Sign in with Google')."
+    echo "  4. CLI status check: pve-gdrive status"
 }
 
 main() {

@@ -598,6 +598,24 @@ class TestOAuthAndServiceAccount(DaemonTestBase):
         )
         self.assertEqual(verify.returncode, 0, verify.stderr.decode())
 
+    def test_standard_oauth_login_and_in_memory_refresh(self) -> None:
+        oauth = OAuthManager(self.config)
+        started = oauth.start_oauth_login()
+        self.assertIn("accounts.google.com/o/oauth2/auth", started["auth_url"])
+        self.assertTrue(started["state"])
+
+        acct = oauth.finish_oauth_login(
+            f"http://127.0.0.1:53682/?state={started['state']}&code=auth-code-xyz",
+            state=started["state"],
+        )
+        self.assertEqual(acct["mode"], "oauth")
+        self.assertEqual(acct["email"], "admin@example.org")
+
+        # Subsequent get_access_token uses cached token, and refresh uses refresh_token
+        oauth._token_cache[acct["id"]]["expires_at"] = time.time() - 10
+        refreshed = oauth.get_access_token(acct["id"])
+        self.assertTrue(refreshed.startswith("refreshed-tok-"))
+
 
 class TestDriveClient(DaemonTestBase):
     def _create_acct(self, oauth: OAuthManager) -> str:

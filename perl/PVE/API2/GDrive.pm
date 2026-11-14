@@ -185,6 +185,7 @@ __PACKAGE__->register_method({
     name        => 'list_accounts',
     path        => 'accounts',
     method      => 'GET',
+    protected   => 1,
     description => 'List configured Google Drive account profiles and cached quotas.',
     permissions => {
         check => ['perm', '/storage', ['Datastore.Audit', 'Datastore.Allocate'], any => 1],
@@ -206,9 +207,130 @@ __PACKAGE__->register_method({
 });
 
 __PACKAGE__->register_method({
+    name        => 'oauth_start',
+    path        => 'oauth/start',
+    method      => 'POST',
+    protected   => 1,
+    description => 'Start a standard Google OAuth2 sign-in flow and return the authorization URL.',
+    permissions => {
+        check => ['or',
+            ['perm', '/', ['Sys.Modify']],
+            ['perm', '/storage', ['Datastore.Allocate']],
+        ],
+    },
+    parameters => {
+        additionalProperties => 0,
+        properties           => {
+            scope => {
+                description => 'Google Drive OAuth scope (drive or drive.file).',
+                type        => 'string',
+                enum        => ['drive', 'drive.file'],
+                default     => 'drive',
+                optional    => 1,
+            },
+            client_id => {
+                description => 'Optional custom OAuth2 Client ID (defaults to built-in desktop client).',
+                type        => 'string',
+                optional    => 1,
+            },
+            client_secret => {
+                description => 'Optional custom OAuth2 Client Secret.',
+                type        => 'string',
+                optional    => 1,
+            },
+            redirect_uri => {
+                description => 'Optional OAuth2 redirect URI.',
+                type        => 'string',
+                optional    => 1,
+            },
+        },
+    },
+    returns => {
+        type       => 'object',
+        properties => {
+            state        => { type => 'string' },
+            auth_url     => { type => 'string' },
+            redirect_uri => { type => 'string', optional => 1 },
+        },
+    },
+    code => sub {
+        my ($param) = @_;
+        my $payload = {};
+        for my $k (qw(scope client_id client_secret redirect_uri)) {
+            $payload->{$k} = $param->{$k} if defined $param->{$k} && $param->{$k} ne '';
+        }
+        return _ipc_request('POST', '/v1/oauth/start', $payload);
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'oauth_finish',
+    path        => 'oauth/finish',
+    method      => 'POST',
+    protected   => 1,
+    description => 'Finish Google OAuth2 sign-in using a redirect URL, authorization code, or rclone token.',
+    permissions => {
+        check => ['or',
+            ['perm', '/', ['Sys.Modify']],
+            ['perm', '/storage', ['Datastore.Allocate']],
+        ],
+    },
+    parameters => {
+        additionalProperties => 0,
+        properties           => {
+            code => {
+                description => 'Pasted redirect URL, authorization code, or rclone authorize JSON token.',
+                type        => 'string',
+            },
+            state => {
+                description => 'OAuth2 state token from oauth/start.',
+                type        => 'string',
+                optional    => 1,
+            },
+            account_id => {
+                description => 'Optional profile ID for this Google account.',
+                type        => 'string',
+                pattern     => '[a-zA-Z0-9._@-]+',
+                optional    => 1,
+            },
+            client_id => {
+                description => 'Optional custom OAuth2 Client ID.',
+                type        => 'string',
+                optional    => 1,
+            },
+            client_secret => {
+                description => 'Optional custom OAuth2 Client Secret.',
+                type        => 'string',
+                optional    => 1,
+            },
+            redirect_uri => {
+                description => 'Optional OAuth2 redirect URI.',
+                type        => 'string',
+                optional    => 1,
+            },
+        },
+    },
+    returns => {
+        type       => 'object',
+        properties => {
+            account => { type => 'object' },
+        },
+    },
+    code => sub {
+        my ($param) = @_;
+        my $payload = { code => $param->{code} };
+        for my $k (qw(state account_id client_id client_secret redirect_uri)) {
+            $payload->{$k} = $param->{$k} if defined $param->{$k} && $param->{$k} ne '';
+        }
+        return _ipc_request('POST', '/v1/oauth/finish', $payload);
+    },
+});
+
+__PACKAGE__->register_method({
     name        => 'create_service_account',
     path        => 'accounts/service-account',
     method      => 'POST',
+    protected   => 1,
     description => 'Register a Google Service Account JSON credential profile.',
     permissions => {
         check => ['or',
@@ -252,6 +374,7 @@ __PACKAGE__->register_method({
     name        => 'delete_account',
     path        => 'accounts/{account}',
     method      => 'DELETE',
+    protected   => 1,
     description => 'Delete a configured Google Drive account profile.',
     permissions => {
         check => ['or',
@@ -282,6 +405,7 @@ __PACKAGE__->register_method({
     name        => 'list_drives',
     path        => 'accounts/{account}/drives',
     method      => 'GET',
+    protected   => 1,
     description => 'List Google Shared Drives accessible to an account.',
     permissions => {
         check => ['perm', '/storage', ['Datastore.Audit', 'Datastore.Allocate'], any => 1],
@@ -313,6 +437,7 @@ __PACKAGE__->register_method({
     name        => 'get_queue',
     path        => 'queue',
     method      => 'GET',
+    protected   => 1,
     description => 'Get active Google Drive upload queue and VFS cache status.',
     permissions => {
         check => ['perm', '/storage', ['Datastore.Audit', 'Datastore.Allocate'], any => 1],
@@ -344,6 +469,7 @@ __PACKAGE__->register_method({
     name        => 'picker_import',
     path        => 'picker/import',
     method      => 'POST',
+    protected   => 1,
     description => 'Import ISO or container template files selected via Google Picker into proxmox/template/.',
     permissions => {
         check => ['or',

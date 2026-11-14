@@ -292,12 +292,27 @@ do_install() {
     log_info "pve-gdrived.service is active and running."
     warn_if_cluster
 
+    if [[ -t 0 && "$ASSUME_YES" -eq 0 ]]; then
+        echo
+        local login_reply
+        read -r -p "Sign in to your Google Drive account now in the CLI? [Y/n] " login_reply
+        case "$login_reply" in
+            [nN]|[nN][oO])
+                log_info "Skipped CLI login. You can run 'pve-gdrive login' anytime or sign in from the Web UI."
+                ;;
+            *)
+                pve-gdrive login || log_warn "CLI login did not complete. You can re-run 'pve-gdrive login' anytime."
+                ;;
+        esac
+    fi
+
     echo
     log_info "Installation complete!"
     log_info "Next steps:"
-    echo "  1. Open the Proxmox Web UI -> Datacenter -> Storage -> Add -> Google Drive."
-    echo "  2. Click 'Sign in with Google' (or choose BYOC / Service Account)."
-    echo "  3. CLI status check: pve-gdrive status"
+    echo "  1. Sign in from CLI anytime with: pve-gdrive login"
+    echo "  2. Open the Proxmox Web UI -> Datacenter -> Storage -> Add -> Google Drive."
+    echo "  3. Select your Google account (or click 'Sign in with Google')."
+    echo "  4. CLI status check: pve-gdrive status"
 }
 
 main() {

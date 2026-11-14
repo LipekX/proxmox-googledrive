@@ -44,15 +44,31 @@ Options: `--yes` (non-interactive), `--skip-build` (use existing `.deb` in `dist
 
 ---
 
-## Google Service Account Authentication (No OAuth, No Re-Login)
+## One-Time Google Sign-In (CLI or Web UI — No Cloud Console Setup Needed)
 
-`pve-storage-gdrive` uses **Google Service Account JSON** authentication exclusively — no OAuth consent screen, no redirect URIs, and no periodic token re-logins.
+`pve-storage-gdrive` lets you log in **once** with your normal Google account using the built-in desktop OAuth client — no Google Cloud project, no Service Account IAM setup, and no periodic re-logins.
 
-1. In Google Cloud Console, create a **Service Account** (`IAM & Admin -> Service Accounts`) and generate a **JSON key**.
-2. Share your Google **Shared Drive** (recommended) or Drive folder with the Service Account's `client_email`.
-3. Open the Proxmox Web UI -> **Datacenter -> Storage -> Add -> Google Drive**, click **Configure Service Account**, and upload or paste the JSON key.
+### Option 1: Sign in via CLI (during install or anytime)
 
-Account profiles are stored atomically in `/etc/pve/priv/gdrive/accounts/<id>.json` (protected by `pmxcfs` `/etc/pve/priv`). Short-lived access tokens are minted and refreshed in memory by `pve-gdrived` using RS256 JWTs signed via `openssl`, so routine token refreshes never churn `/etc/pve` (`pmxcfs`).
+Run on your Proxmox node:
+
+```bash
+pve-gdrive login
+```
+
+1. Open the printed Google Sign-In link in any browser on your computer or phone and click **Allow**.
+2. Your browser will redirect to `http://127.0.0.1:53682/?code=...` (even if the browser says *Unable to connect*, that is normal because your browser is not running on the Proxmox server).
+3. Copy the full `http://127.0.0.1:53682/?code=...` URL from your browser's address bar and paste it into the terminal prompt.
+
+### Option 2: Sign in via Proxmox Web UI
+
+1. Open the Proxmox Web UI -> **Datacenter -> Storage -> Add -> Google Drive**.
+2. Click **Sign in with Google** -> **1. Open Google Sign-In in Browser**.
+3. Copy the redirected `http://127.0.0.1:53682/?code=...` URL from your browser's address bar and paste it into the dialog.
+
+*(Power users can also paste the output of `rclone authorize "drive"` or a Service Account JSON key into the same field.)*
+
+Account profiles (with your long-lived `refresh_token`) are stored atomically in `/etc/pve/priv/gdrive/accounts/<id>.json` (protected by `pmxcfs` `/etc/pve/priv`). Short-lived access tokens are refreshed automatically in memory by `pve-gdrived`, so routine token refreshes never churn `/etc/pve` (`pmxcfs`).
 
 ---
 

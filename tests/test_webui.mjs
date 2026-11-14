@@ -370,6 +370,28 @@ function loadWebUiWithMocks() {
                 },
               },
             });
+          } else if (opts.url === '/api2/json/gdrive/oauth/start' && opts.method === 'POST' && opts.success) {
+            opts.success({
+              result: {
+                data: {
+                  state: 'st-test-123',
+                  auth_url: 'https://accounts.google.com/o/oauth2/auth?state=st-test-123',
+                },
+              },
+            });
+          } else if (opts.url === '/api2/json/gdrive/oauth/finish' && opts.method === 'POST' && opts.success) {
+            opts.success({
+              result: {
+                data: {
+                  account: {
+                    id: (opts.params && opts.params.account_id) || 'oauth-user',
+                    email: 'u@example.com',
+                    mode: 'oauth',
+                    scope: 'drive',
+                  },
+                },
+              },
+            });
           } else if (opts.url === '/api2/json/gdrive/accounts/service-account' && opts.method === 'POST' && opts.success) {
             opts.success({
               result: {
@@ -522,7 +544,7 @@ test('ui: utils extractDriveFileIds and formatBytes work cleanly', () => {
   assert.equal(formatBytes(1536), '1.5 KiB');
 });
 
-test('ui: AuthWizardWindow configures Service Account and PickerModal omits empty optional params', () => {
+test('ui: AuthWizardWindow supports OAuth redirect URL and Service Account JSON and PickerModal omits empty optional params', () => {
   const { sandbox, apiCalls } = loadWebUiWithMocks();
 
   let createdAccount = null;
@@ -531,11 +553,27 @@ test('ui: AuthWizardWindow configures Service Account and PickerModal omits empt
       createdAccount = acct;
     },
   });
-  const saIdField = wizard.items[1];
+  const openBtn = wizard.items[1];
+  const saIdField = wizard.items[2];
   const saJsonField = wizard.items[3];
   const saveBtn = wizard.buttons[0];
 
-  // Empty account_id is omitted
+  // Test standard OAuth flow (Open Google Sign-In + paste redirect URL)
+  openBtn.handler();
+  saIdField.setValue('');
+  saJsonField.setValue('http://127.0.0.1:53682/?state=st-test-123&code=4/0AeanS_test_code');
+  saveBtn.handler();
+
+  const oauthFinishCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/oauth/finish');
+  assert.ok(oauthFinishCall);
+  assert.equal(oauthFinishCall.params.state, 'st-test-123');
+  assert.equal(
+    oauthFinishCall.params.code,
+    'http://127.0.0.1:53682/?state=st-test-123&code=4/0AeanS_test_code'
+  );
+  assert.equal(createdAccount.id, 'oauth-user');
+
+  // Test Service Account JSON fallback in the same field
   saIdField.setValue('');
   saJsonField.setValue(
     JSON.stringify({
@@ -573,6 +611,7 @@ test('ui: AuthWizardWindow configures Service Account and PickerModal omits empt
 test('overlay-hook.sh: install is idempotent, preserves template & mode, and remove restores original', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-gdrive-hook-'));
   const tplPath = path.join(tmpDir, 'index.html.tpl');
+  const api2Path = path.join(tmpDir, 'API2.pm');
   const hookPath = path.join(ROOT_DIR, 'ui/overlay-hook.sh');
 
   const originalTpl = [
@@ -589,9 +628,19 @@ test('overlay-hook.sh: install is idempotent, preserves template & mode, and rem
     '',
   ].join('\n');
 
+  const originalApi2 = [
+    'package PVE::API2;',
+    'use strict;',
+    'use warnings;',
+    'use PVE::API2::Storage::Config;',
+    '1;',
+    '',
+  ].join('\n');
+
   try {
     fs.writeFileSync(tplPath, originalTpl, { mode: 0o644 });
-    const env = { ...process.env, PVE_INDEX_TPL: tplPath };
+    fs.writeFileSync(api2Path, originalApi2, { mode: 0o644 });
+    const env = { ...process.env, PVE_INDEX_TPL: tplPath, PVE_API2_PM: api2Path };
 
     // Install
     execFileSync(hookPath, ['--install'], { env });
@@ -608,6 +657,18 @@ test('overlay-hook.sh: install is idempotent, preserves template & mode, and rem
     );
     assert.equal(fs.statSync(tplPath).mode & 0o777, 0o644);
 
+    const afterApi2Install = fs.readFileSync(api2Path, 'utf8');
+    assert.match(afterApi2Install, /# BEGIN pve-storage-gdrive/);
+    assert.match(
+      afterApi2Install,
+      /require PVE::Storage::Custom::GDrivePlugin; PVE::Storage::Custom::GDrivePlugin->register_api2\(\);/
+    );
+    assert.match(afterApi2Install, /# END pve-storage-gdrive/);
+    assert.ok(
+      afterApi2Install.indexOf('register_api2') < afterApi2Install.lastIndexOf('1;'),
+      'Perl hook must appear before final 1;'
+    );
+
     // Status
     const statusOut = execFileSync(hookPath, ['--status'], { env, encoding: 'utf8' }).trim();
     assert.equal(statusOut, 'installed');
@@ -619,10 +680,16 @@ test('overlay-hook.sh: install is idempotent, preserves template & mode, and rem
     assert.equal(afterReinstall, afterInstall);
     assert.equal((afterReinstall.match(/pve-gdrive\.js/g) || []).length, 1);
 
+    const afterApi2Reinstall = fs.readFileSync(api2Path, 'utf8');
+    assert.equal(afterApi2Reinstall, afterApi2Install);
+    assert.equal((afterApi2Reinstall.match(/register_api2/g) || []).length, 1);
+
     // Remove
     execFileSync(hookPath, ['--remove'], { env });
     const afterRemove = fs.readFileSync(tplPath, 'utf8');
     assert.equal(afterRemove, originalTpl);
+    const afterApi2Remove = fs.readFileSync(api2Path, 'utf8');
+    assert.equal(afterApi2Remove, originalApi2);
 
     // Idempotent remove
     execFileSync(hookPath, ['--remove'], { env });

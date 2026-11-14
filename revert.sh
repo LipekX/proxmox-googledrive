@@ -5,6 +5,7 @@ PKG_NAME="pve-storage-gdrive"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_ROOT="/var/backups/pve-storage-gdrive"
 TPL_FILE="/usr/share/pve-manager/index.html.tpl"
+API2_PM_FILE="/usr/share/perl5/PVE/API2.pm"
 
 ASSUME_YES=0
 PURGE_CONFIG=0
@@ -119,6 +120,15 @@ main() {
     elif [[ -x "$SCRIPT_DIR/ui/overlay-hook.sh" && -f "$TPL_FILE" ]]; then
         "$SCRIPT_DIR/ui/overlay-hook.sh" --remove || true
         log_info "Removed pve-storage-gdrive overlay markers from $TPL_FILE"
+    fi
+
+    # Restore pristine original API2.pm if backed up
+    if [[ -f "$BACKUP_ROOT/API2.pm.orig" && -f "$API2_PM_FILE" ]]; then
+        cat "$BACKUP_ROOT/API2.pm.orig" > "$API2_PM_FILE"
+        log_info "Restored $API2_PM_FILE from $BACKUP_ROOT/API2.pm.orig"
+    elif [[ -x "$SCRIPT_DIR/ui/overlay-hook.sh" && -f "$API2_PM_FILE" ]]; then
+        "$SCRIPT_DIR/ui/overlay-hook.sh" --remove || true
+        log_info "Removed pve-storage-gdrive overlay markers from $API2_PM_FILE"
     fi
 
     # Clean up any leftover plugin/service files

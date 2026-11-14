@@ -15,7 +15,7 @@ use PVE::JSONSchema qw(get_standard_option);
 
 use constant {
     MIN_APIVER          => 9,
-    MAX_APIVER          => 15,
+    MAX_APIVER          => 18,
     DEFAULT_SOCK_PATH   => '/run/pve-gdrived.sock',
     DEFAULT_PRIV_DIR    => '/etc/pve/priv/gdrive',
     DEFAULT_MNT_DIR     => '/mnt/pve',
@@ -446,10 +446,17 @@ sub register_api2 {
     my $ok = eval {
         if ($INC{'PVE/API2.pm'} || PVE::API2->can('register_method')) {
             require PVE::API2::GDrive;
-            PVE::API2->register_method({
-                subclass => 'PVE::API2::GDrive',
-                path     => 'gdrive',
-            });
+            my $already = 0;
+            if (PVE::API2->can('method_attributes')) {
+                my $ma = PVE::API2->method_attributes() || [];
+                $already = grep { ($_->{path} // '') eq 'gdrive' } @$ma;
+            }
+            if (!$already) {
+                PVE::API2->register_method({
+                    subclass => 'PVE::API2::GDrive',
+                    path     => 'gdrive',
+                });
+            }
             $API2_REGISTERED = 1;
         }
         1;

@@ -141,13 +141,14 @@
             : function (fn) { fn(); };
 
     /**
-     * Google Service Account Configuration Modal (never expires, no OAuth re-login).
+     * One-Time Google Sign-In Modal (supports browser OAuth link + redirect URL paste,
+     * `rclone authorize "drive"` token paste, or Service Account JSON).
      */
     Ext.define('PVE.gdrive.AuthWizardWindow', {
         extend: 'Ext.window.Window',
         alias: 'widget.pveGDriveAuthWizard',
 
-        title: _('Configure Google Service Account'),
+        title: _('Sign in with Google'),
         modal: true,
         width: 580,
         bodyPadding: 12,
@@ -157,23 +158,24 @@
 
         initComponent: function () {
             var me = this;
+            var currentOauthState = '';
 
-            var saAccountId = Ext.create('Ext.form.field.Text', {
+            var accountIdField = Ext.create('Ext.form.field.Text', {
                 fieldLabel: _('Profile ID (optional)'),
-                emptyText: _('Auto-derived from client_email if blank'),
+                emptyText: _('Auto-derived from your Google email if blank'),
                 width: '100%',
             });
 
-            var saJsonArea = Ext.create('Ext.form.field.TextArea', {
-                fieldLabel: _('Service Account JSON'),
-                emptyText: _('Paste contents of Google Service Account .json key file...'),
-                height: 180,
+            var inputArea = Ext.create('Ext.form.field.TextArea', {
+                fieldLabel: _('Redirect URL / Code'),
+                emptyText: _('Paste the http://127.0.0.1:53682/?code=... URL from your browser address bar (or rclone token / Service Account JSON)...'),
+                height: 150,
                 width: '100%',
                 allowBlank: false,
             });
 
-            var saFileField = Ext.create('Ext.form.field.File', {
-                fieldLabel: _('Upload JSON Key File'),
+            var fileField = Ext.create('Ext.form.field.File', {
+                fieldLabel: _('Or Upload JSON Key'),
                 buttonText: _('Browse...'),
                 width: '100%',
                 listeners: {
@@ -190,7 +192,7 @@
                             var reader = new global.FileReader();
                             reader.onload = function (ev) {
                                 if (ev && ev.target && typeof ev.target.result === 'string') {
-                                    saJsonArea.setValue(ev.target.result);
+                                    inputArea.setValue(ev.target.result);
                                 }
                             };
                             reader.readAsText(file);
@@ -199,42 +201,114 @@
                 },
             });
 
+            var openGoogleSignIn = function () {
+                Utils.apiRequest({
+                    url: '/api2/json/gdrive/oauth/start',
+                    method: 'POST',
+                    params: { scope: 'drive' },
+                    waitMsgTarget: me,
+                    success: function (response) {
+                        var data = (response.result && response.result.data) || {};
+                        currentOauthState = data.state || '';
+                        if (data.auth_url && typeof global.open === 'function') {
+                            global.open(data.auth_url, '_blank', 'noopener,noreferrer');
+                        } else if (data.auth_url) {
+                            Ext.Msg.alert(_('Google Sign-In URL'), data.auth_url);
+                        }
+                    },
+                    failure: function (response) {
+                        Ext.Msg.alert(
+                            _('Google Sign-In Error'),
+                            response.htmlStatus || _('Failed to start Google OAuth flow.')
+                        );
+                    },
+                });
+            };
+
             me.items = [
                 {
                     xtype: 'displayfield',
                     value:
-                        _('Service Accounts authenticate permanently with Google Drive without OAuth consent screens, redirect URLs, or periodic re-logins.') +
+                        '<b>' +
+                        _('Option A — One-Click Browser Login:') +
+                        '</b><br>' +
+                        _('1) Click "1. Open Google Sign-In" below and log in with your regular Google account.') +
+                        '<br>' +
+                        _('2) When Google redirects to <code>http://127.0.0.1:53682/?code=...</code> (even if the page says Unable to connect), copy the full URL from your browser address bar and paste it below.') +
                         '<br><br><b>' +
-                        _('Setup:') +
+                        _('Option B — CLI Login:') +
                         '</b> ' +
-                        _('1) Create a Service Account key (JSON) in Google Cloud IAM. 2) Share your Google Shared Drive (or Drive folder) with the Service Account email (client_email). 3) Upload or paste the JSON key below.'),
+                        _('Run <code>pve-gdrive login</code> on your Proxmox node via SSH.'),
                 },
-                saAccountId,
-                saFileField,
-                saJsonArea,
+                {
+                    xtype: 'button',
+                    text: _('1. Open Google Sign-In in Browser'),
+                    iconCls: 'fa fa-external-link',
+                    margin: '4 0 10 0',
+                    handler: openGoogleSignIn,
+                },
+                accountIdField,
+                inputArea,
+                fileField,
             ];
 
             me.buttons = [
                 {
-                    text: _('Save Service Account'),
+                    text: _('Save Google Account'),
                     iconCls: 'fa fa-check',
                     handler: function () {
-                        var jsonText = saJsonArea.getValue().trim();
-                        if (!jsonText) {
-                            Ext.Msg.alert(_('Error'), _('Upload or paste a valid Service Account JSON key.'));
+                        var rawText = inputArea.getValue().trim();
+                        if (!rawText) {
+                            Ext.Msg.alert(_('Error'), _('Paste the redirected Google URL, authorization code, or JSON key.'));
                             return;
                         }
-                        var saParams = {
-                            service_account_json: jsonText,
-                        };
-                        var saIdVal = saAccountId.getValue().trim();
-                        if (saIdVal) {
-                            saParams.account_id = saIdVal;
+                        var acctIdVal = accountIdField.getValue().trim();
+                        var isServiceAccount =
+                            rawText.charAt(0) === '{' &&
+                            rawText.indexOf('"service_account"') !== -1 &&
+                            rawText.indexOf('"private_key"') !== -1;
+
+                        if (isServiceAccount) {
+                            var saParams = { service_account_json: rawText };
+                            if (acctIdVal) {
+                                saParams.account_id = acctIdVal;
+                            }
+                            Utils.apiRequest({
+                                url: '/api2/json/gdrive/accounts/service-account',
+                                method: 'POST',
+                                params: saParams,
+                                waitMsgTarget: me,
+                                success: function (response) {
+                                    var account =
+                                        response.result &&
+                                        response.result.data &&
+                                        response.result.data.account;
+                                    if (typeof me.onAccountCreated === 'function') {
+                                        me.onAccountCreated(account);
+                                    }
+                                    me.close();
+                                },
+                                failure: function (response) {
+                                    Ext.Msg.alert(
+                                        _('Account Error'),
+                                        response.htmlStatus || _('Failed to save Google Account.')
+                                    );
+                                },
+                            });
+                            return;
+                        }
+
+                        var oauthParams = { code: rawText };
+                        if (currentOauthState) {
+                            oauthParams.state = currentOauthState;
+                        }
+                        if (acctIdVal) {
+                            oauthParams.account_id = acctIdVal;
                         }
                         Utils.apiRequest({
-                            url: '/api2/json/gdrive/accounts/service-account',
+                            url: '/api2/json/gdrive/oauth/finish',
                             method: 'POST',
-                            params: saParams,
+                            params: oauthParams,
                             waitMsgTarget: me,
                             success: function (response) {
                                 var account =
@@ -248,8 +322,8 @@
                             },
                             failure: function (response) {
                                 Ext.Msg.alert(
-                                    _('Service Account Error'),
-                                    response.htmlStatus || _('Failed to save Service Account.')
+                                    _('Google Sign-In Error'),
+                                    response.htmlStatus || _('Failed to complete Google Sign-In.')
                                 );
                             },
                         });
@@ -345,7 +419,7 @@
                 editable: false,
                 forceSelection: false,
                 allowBlank: false,
-                emptyText: _('Select or configure a Service Account...'),
+                emptyText: _('Select or sign in to a Google Account...'),
                 listeners: {
                     change: function (_field, newVal) {
                         loadDrives(newVal);
@@ -446,8 +520,8 @@
                     items: [
                         {
                             xtype: 'button',
-                            text: _('Configure Service Account'),
-                            iconCls: 'fa fa-key',
+                            text: _('Sign in with Google'),
+                            iconCls: 'fa fa-google',
                             handler: function () {
                                 Ext.create('PVE.gdrive.AuthWizardWindow', {
                                     onAccountCreated: function (account) {

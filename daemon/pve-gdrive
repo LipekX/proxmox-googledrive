@@ -105,6 +105,62 @@ def _cmd_queue(sock: str, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_login(sock: str, args: argparse.Namespace) -> int:
+    start_body: dict[str, str] = {"scope": args.scope}
+    if args.client_id:
+        start_body["client_id"] = args.client_id
+    if args.client_secret:
+        start_body["client_secret"] = args.client_secret
+
+    state = ""
+    code_input = (args.code or "").strip()
+
+    if not code_input:
+        code, start_data = ipc_request(sock, "POST", "/v1/oauth/start", body=start_body)
+        if code >= 400:
+            print(f"Error: {start_data.get('error', start_data)}", file=sys.stderr)
+            return 1
+        state = str(start_data.get("state") or "")
+        auth_url = str(start_data.get("auth_url") or "")
+        print("\n=== Sign in with Google (One-Time Setup) ===")
+        print("1. Open this link in any browser and sign in to your Google account:\n")
+        print(f"   {auth_url}\n")
+        print("2. After clicking Allow, your browser will redirect to http://127.0.0.1:53682/?code=...")
+        print("   (Even if the page says 'Unable to connect', copy the URL from your browser's address bar!)")
+        print("   Or, if you prefer rclone on your PC: run `rclone authorize \"drive\"` and paste the token.\n")
+        try:
+            code_input = input("Paste the redirected URL (or code / token) here: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.", file=sys.stderr)
+            return 1
+
+    if not code_input:
+        print("Error: Authorization URL or code cannot be empty.", file=sys.stderr)
+        return 1
+
+    finish_body: dict[str, str] = {"code": code_input}
+    if state:
+        finish_body["state"] = state
+    if args.account_id:
+        finish_body["account_id"] = args.account_id
+    if args.client_id:
+        finish_body["client_id"] = args.client_id
+    if args.client_secret:
+        finish_body["client_secret"] = args.client_secret
+
+    code, data = ipc_request(sock, "POST", "/v1/oauth/finish", body=finish_body)
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0 if code < 400 else 1
+    if code >= 400:
+        print(f"Error: {data.get('error', data)}", file=sys.stderr)
+        return 1
+
+    acct = data.get("account") or {}
+    print(f"\nSuccess! Logged in to Google Drive as: {acct.get('email') or acct.get('id')} (ID: {acct.get('id')})")
+    return 0
+
+
 def _cmd_wait_upload(sock: str, args: argparse.Namespace) -> int:
     code, data = ipc_request(
         sock,
@@ -146,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("accounts", help="List configured Google accounts")
     sub.add_parser("queue", help="Show active upload queue")
 
+    p_login = sub.add_parser("login", help="Sign in to Google Drive once from the CLI")
+    p_login.add_argument("--account-id", help="Optional profile ID (defaults to your Google email)")
+    p_login.add_argument("--code", help="Redirect URL, authorization code, or rclone token JSON")
+    p_login.add_argument("--scope", choices=["drive", "drive.file"], default="drive", help="OAuth scope")
+    p_login.add_argument("--client-id", help="Optional custom OAuth Client ID")
+    p_login.add_argument("--client-secret", help="Optional custom OAuth Client Secret")
+
     p_wait = sub.add_parser("wait-upload", help="Wait for an upload to finish")
     p_wait.add_argument("storeid", help="Proxmox storage ID")
     p_wait.add_argument("path", help="File path (absolute or storage-relative)")
@@ -159,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_accounts(args.sock, args)
         if args.command == "queue":
             return _cmd_queue(args.sock, args)
+        if args.command == "login":
+            return _cmd_login(args.sock, args)
         if args.command == "wait-upload":
             return _cmd_wait_upload(args.sock, args)
     except OSError as exc:

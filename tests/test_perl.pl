@@ -326,9 +326,13 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
     local $PVE::Storage::MOCK_APIAGE = 2;
     is($plugin->api(), 12, 'api() negotiates PVE 9.x APIVER=12');
 
-    local $PVE::Storage::MOCK_APIVER = 18;
+    local $PVE::Storage::MOCK_APIVER = 16;
+    local $PVE::Storage::MOCK_APIAGE = 7;
+    is($plugin->api(), 16, 'api() negotiates PVE 9.x APIVER=16');
+
+    local $PVE::Storage::MOCK_APIVER = 20;
     local $PVE::Storage::MOCK_APIAGE = 4;
-    is($plugin->api(), 15, 'api() caps at MAX_APIVER within APIAGE window');
+    is($plugin->api(), 18, 'api() caps at MAX_APIVER within APIAGE window');
 }
 
 {
@@ -448,6 +452,11 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
     my $api2_methods = PVE::API2->registered_methods();
     my ($found) = grep { ($_->{subclass} // '') eq 'PVE::API2::GDrive' && ($_->{path} // '') eq 'gdrive' } @$api2_methods;
     ok(defined $found, 'GDrivePlugin safely registers PVE::API2::GDrive into PVE::API2');
+
+    my $gdrive_methods = PVE::API2::GDrive->registered_methods();
+    for my $m (grep { ($_->{name} // '') ne 'index' } @$gdrive_methods) {
+        is($m->{protected}, 1, "PVE::API2::GDrive method '$m->{name}' has protected => 1 for pvedaemon proxying");
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -461,6 +470,18 @@ is($plugin->type(), 'gdrive', 'type() returns gdrive');
 
     my $accts = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'GET', 'accounts');
     is($accts->{accounts}[0]{email}, 'user@example.com', 'GET accounts returns daemon accounts');
+
+    my $ostart = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/start', {
+        scope => 'drive',
+    });
+    is($ostart->{state}, 'st-abc123', 'POST oauth/start returns state and auth_url');
+
+    my $ofin = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'oauth/finish', {
+        code       => 'http://127.0.0.1:53682/?code=xyz',
+        state      => 'st-abc123',
+        account_id => 'user@example.com',
+    });
+    is($ofin->{account}{id}, 'user@example.com', 'POST oauth/finish completes OAuth sign-in');
 
     my $sa = PVE::RESTHandler::test_call('PVE::API2::GDrive', 'POST', 'accounts/service-account', {
         account_id           => 'sa-backup',

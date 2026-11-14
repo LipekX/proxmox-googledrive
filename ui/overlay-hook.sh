@@ -7,10 +7,16 @@ set -euo pipefail
 
 DEFAULT_TPL="/usr/share/pve-manager/index.html.tpl"
 TARGET_TPL="${PVE_INDEX_TPL:-$DEFAULT_TPL}"
+DEFAULT_API2_PM="/usr/share/perl5/PVE/API2.pm"
+TARGET_API2_PM="${PVE_API2_PM:-$DEFAULT_API2_PM}"
 
 BEGIN_MARKER="<!-- # BEGIN pve-storage-gdrive -->"
 SCRIPT_LINE='<script type="text/javascript" src="/pve2/js/pve-gdrive.js"></script>'
 END_MARKER="<!-- # END pve-storage-gdrive -->"
+
+PERL_BEGIN_MARKER="# BEGIN pve-storage-gdrive"
+PERL_HOOK_LINE='eval { require PVE::Storage::Custom::GDrivePlugin; PVE::Storage::Custom::GDrivePlugin->register_api2(); };'
+PERL_END_MARKER="# END pve-storage-gdrive"
 
 usage() {
   cat <<'EOF'
@@ -18,6 +24,7 @@ Usage: overlay-hook.sh [--install | --remove | --status]
 
 Environment:
   PVE_INDEX_TPL   Path to index.html.tpl (default: /usr/share/pve-manager/index.html.tpl)
+  PVE_API2_PM     Path to PVE/API2.pm (default: /usr/share/perl5/PVE/API2.pm)
 EOF
 }
 
@@ -129,13 +136,68 @@ do_install() {
   write_preserving_attrs "$tmp" "$file"
 }
 
+do_install_perl_api() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  validate_markers "$file"
+
+  if has_begin_marker "$file" && grep -Fq "$PERL_HOOK_LINE" "$file"; then
+    return 0
+  fi
+
+  if has_begin_marker "$file"; then
+    do_remove "$file"
+  fi
+
+  local tmp
+  tmp="$(mktemp "$(dirname "$file")/.pve-gdrive-overlay.XXXXXX")"
+  trap 'rm -f "${tmp:-}"' RETURN
+
+  local lines=()
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lines+=("$line")
+  done < "$file"
+
+  local last_idx=-1
+  local i
+  for (( i=${#lines[@]}-1; i>=0; i-- )); do
+    if [[ "${lines[$i]}" =~ ^[[:space:]]*1\;[[:space:]]*$ ]]; then
+      last_idx=$i
+      break
+    fi
+  done
+
+  for (( i=0; i<${#lines[@]}; i++ )); do
+    if (( i == last_idx )); then
+      printf '%s\n%s\n%s\n' "$PERL_BEGIN_MARKER" "$PERL_HOOK_LINE" "$PERL_END_MARKER" >> "$tmp"
+    fi
+    printf '%s\n' "${lines[$i]}" >> "$tmp"
+  done
+
+  if (( last_idx < 0 )); then
+    printf '%s\n%s\n%s\n' "$PERL_BEGIN_MARKER" "$PERL_HOOK_LINE" "$PERL_END_MARKER" >> "$tmp"
+  fi
+
+  write_preserving_attrs "$tmp" "$file"
+}
+
 do_status() {
   local file="$1"
+  local perl_file="${2:-}"
   if [[ ! -f "$file" ]]; then
     echo "missing: $file"
     return 1
   fi
   if has_begin_marker "$file" && has_end_marker "$file" && grep -Fq "$SCRIPT_LINE" "$file"; then
+    if [[ -n "$perl_file" && -f "$perl_file" ]]; then
+      if ! (has_begin_marker "$perl_file" && has_end_marker "$perl_file" && grep -Fq "$PERL_HOOK_LINE" "$perl_file"); then
+        echo "not-installed"
+        return 1
+      fi
+    fi
     echo "installed"
     return 0
   fi
@@ -148,12 +210,14 @@ main() {
   case "$action" in
     --install)
       do_install "$TARGET_TPL"
+      do_install_perl_api "$TARGET_API2_PM"
       ;;
     --remove)
       do_remove "$TARGET_TPL"
+      do_remove "$TARGET_API2_PM"
       ;;
     --status)
-      do_status "$TARGET_TPL"
+      do_status "$TARGET_TPL" "$TARGET_API2_PM"
       ;;
     -h|--help)
       usage
