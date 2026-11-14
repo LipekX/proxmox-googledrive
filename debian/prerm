@@ -29,7 +29,6 @@ case "${1:-}" in
                 systemctl stop "$SERVICE" || true
             fi
             systemctl disable "$SERVICE" >/dev/null 2>&1 || true
-            restart_pve_services
         fi
         ;;
     upgrade|deconfigure|failed-upgrade)

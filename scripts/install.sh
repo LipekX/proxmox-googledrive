@@ -177,9 +177,9 @@ do_uninstall() {
     check_proxmox_host
     confirm_action "Uninstall $PKG_NAME from $(hostname)?"
 
-    if dpkg-query -W -f='${Status}' "$PKG_NAME" 2>/dev/null | grep -q "install ok installed"; then
+    if dpkg-query -W -f='${Status}' "$PKG_NAME" 2>/dev/null | grep -qE "install ok installed|half-configured|unpacked"; then
         log_info "Removing $PKG_NAME..."
-        DEBIAN_FRONTEND=noninteractive apt-get remove -y "$PKG_NAME"
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y "$PKG_NAME" || dpkg --remove --force-remove-reinstreq "$PKG_NAME"
         log_info "$PKG_NAME has been removed."
     else
         log_warn "$PKG_NAME is not currently installed."

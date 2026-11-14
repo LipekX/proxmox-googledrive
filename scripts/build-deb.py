@@ -228,6 +228,7 @@ def stage_payload_and_control(
     maintainer_files = [
         ("postinst", 0o755),
         ("prerm", 0o755),
+        ("postrm", 0o755),
         ("triggers", 0o644),
     ]
     for name, mode in maintainer_files:

@@ -1,0 +1,36 @@
+#!/bin/bash
+set -euo pipefail
+
+PVE_SERVICES=("pvedaemon" "pveproxy" "pvestatd")
+
+systemd_running() {
+    command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+restart_pve_services() {
+    local svc
+    for svc in "${PVE_SERVICES[@]}"; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl restart "$svc" || true
+        fi
+    done
+}
+
+case "${1:-}" in
+    remove|purge)
+        if systemd_running; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            restart_pve_services
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
