@@ -1,8 +1,20 @@
+<p align="center">
+  <img src="assets/banner.jpg" alt="pve-storage-gdrive — Native Google Drive Storage for Proxmox VE 8.x & 9.x" width="100%" />
+</p>
+
 # pve-storage-gdrive
 
 Native **Google Drive** storage backend plugin for **Proxmox VE 8.x and 9.x** (AGPL-3.0-or-later).
 
 Mount your Google **My Drive** or **Shared Drives** as a first-class Proxmox storage target for `vzdump` backups, ISO images, and LXC container templates — complete with a Web UI wizard, Easy Google Sign-In, optional `rclone crypt` client-side encryption, and synchronous upload verification for `vzdump`.
+
+---
+
+## Architecture
+
+<p align="center">
+  <img src="assets/architecture.jpg" alt="pve-storage-gdrive Architecture" width="100%" />
+</p>
 
 ---
 
