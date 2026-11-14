@@ -23,7 +23,7 @@ from .config import (
     read_json,
     validate_store_id,
 )
-from .gdrive import DriveClient
+from .gdrive import DriveAPIError, DriveClient
 from .oauth import OAuthManager
 
 # Rclone's documented public fixed AES-256-CTR obscure key.
@@ -330,12 +330,26 @@ class VFSSupervisor:
         # Validate account exists.
         self.oauth.get_account(account)
 
-        layout = self.drive.ensure_storage_layout(
-            account_id=account,
-            drive_id=drive_id or "",
-            subfolder=subfolder or "",
-            pinned_root_folder_id=(root_folder_id or "").strip() or None,
-        )
+        try:
+            layout = self.drive.ensure_storage_layout(
+                account_id=account,
+                drive_id=drive_id or "",
+                subfolder=subfolder or "",
+                pinned_root_folder_id=(root_folder_id or "").strip() or None,
+            )
+        except DriveAPIError as err:
+            if err.status in (403, 429) and (
+                err.reason in ("rateLimitExceeded", "userRateLimitExceeded")
+                or "Quota exceeded" in err.message
+                or err.status == 429
+            ):
+                layout = {
+                    "root_folder_id": (root_folder_id or "").strip(),
+                    "proxmox_folder_id": "",
+                    "folders": {},
+                }
+            else:
+                raise
 
         meta = {
             "storeid": safe_storeid,
@@ -442,10 +456,15 @@ class VFSSupervisor:
 
         if meta.get("root_folder_id"):
             lines.append(f"root_folder_id = {meta['root_folder_id']}")
+            base_remote = f"{base_section}:"
+        else:
+            clean_sub = (meta.get("subfolder") or "").strip().strip("/")
+            remote_subpath = f"proxmox/{clean_sub}" if clean_sub else "proxmox"
+            base_remote = f"{base_section}:{remote_subpath}"
         if meta.get("drive_id"):
             lines.append(f"team_drive = {meta['drive_id']}")
 
-        remote_target = f"{base_section}:"
+        remote_target = base_remote
 
         if meta.get("encrypt"):
             pw, pw2 = self._read_crypt_credentials(safe_storeid)
@@ -458,7 +477,7 @@ class VFSSupervisor:
                     "",
                     f"[{crypt_section}]",
                     "type = crypt",
-                    f"remote = {base_section}:",
+                    f"remote = {base_remote}",
                     "filename_encryption = standard",
                     "directory_name_encryption = true",
                     f"password = {obs_pw}",

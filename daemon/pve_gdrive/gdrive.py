@@ -69,28 +69,45 @@ class DriveClient:
             headers["Content-Type"] = "application/json; charset=utf-8"
             data = json.dumps(json_body).encode("utf-8")
 
-        req = urllib.request.Request(url, data=data, method=method, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as err:
-            raw = err.read().decode("utf-8", errors="replace")
-            msg = raw
-            reason = ""
+        max_attempts = 4 if timeout >= 3.0 else 1
+        for attempt in range(max_attempts):
+            req = urllib.request.Request(url, data=data, method=method, headers=headers)
             try:
-                parsed = json.loads(raw)
-                err_obj = parsed.get("error", {})
-                if isinstance(err_obj, dict):
-                    msg = str(err_obj.get("message") or raw)
-                    errors = err_obj.get("errors") or []
-                    if errors and isinstance(errors, list):
-                        reason = str(errors[0].get("reason") or "")
-            except Exception:
-                pass
-            raise DriveAPIError(err.code, msg, reason=reason) from err
-        except urllib.error.URLError as err:
-            raise RuntimeError(f"Drive API network error: {err.reason}") from err
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read().decode("utf-8")
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as err:
+                raw = err.read().decode("utf-8", errors="replace")
+                msg = raw
+                reason = ""
+                try:
+                    parsed = json.loads(raw)
+                    err_obj = parsed.get("error", {})
+                    if isinstance(err_obj, dict):
+                        msg = str(err_obj.get("message") or raw)
+                        errors = err_obj.get("errors") or []
+                        if errors and isinstance(errors, list):
+                            reason = str(errors[0].get("reason") or "")
+                except Exception:
+                    pass
+                is_rate_limit = (
+                    err.code in (429, 500, 502, 503, 504)
+                    or (
+                        err.code == 403
+                        and (
+                            reason in ("rateLimitExceeded", "userRateLimitExceeded")
+                            or "Quota exceeded" in msg
+                            or "Rate Limit" in msg
+                        )
+                    )
+                )
+                if is_rate_limit and attempt + 1 < max_attempts:
+                    time.sleep(0.5 * (1.8 ** attempt))
+                    continue
+                raise DriveAPIError(err.code, msg, reason=reason) from err
+            except urllib.error.URLError as err:
+                raise RuntimeError(f"Drive API network error: {err.reason}") from err
+        return {}
 
     def _download_bytes(
         self, url: str, access_token: str, timeout: float = 120.0
