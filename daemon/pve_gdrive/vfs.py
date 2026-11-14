@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -172,16 +173,48 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         self.sock = sock
 
 
+def _allocate_rc_addr() -> str:
+    """Allocate an ephemeral localhost TCP address for rclone --rc-addr."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"127.0.0.1:{port}"
+
+
+def _rc_reachable(rc_addr: str, timeout: float = 0.1) -> bool:
+    """Return True if a TCP listener is accepting connections at rc_addr."""
+    try:
+        host, port_str = rc_addr.rsplit(":", 1)
+        with socket.create_connection((host, int(port_str)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def rc_call(
     rc_sock_path: str,
     endpoint: str,
     payload: Optional[Dict[str, Any]] = None,
     timeout: float = 1.2,
 ) -> Dict[str, Any]:
-    """Send a JSON POST request to rclone's --rc-unix socket."""
-    if not os.path.exists(rc_sock_path):
+    """Send a JSON POST request to rclone's RC endpoint (TCP addr file or Unix socket)."""
+    conn: http.client.HTTPConnection
+    if os.path.exists(rc_sock_path):
+        st_mode = os.stat(rc_sock_path).st_mode
+        if stat.S_ISSOCK(st_mode):
+            conn = _UnixHTTPConnection(rc_sock_path, timeout=timeout)
+        else:
+            with open(rc_sock_path, "r", encoding="utf-8") as fh:
+                addr = fh.read().strip()
+            if not addr or ":" not in addr:
+                raise FileNotFoundError(f"Invalid RC address in {rc_sock_path}")
+            host, port_str = addr.rsplit(":", 1)
+            conn = http.client.HTTPConnection(host, int(port_str), timeout=timeout)
+    elif ":" in rc_sock_path and not rc_sock_path.startswith("/"):
+        host, port_str = rc_sock_path.rsplit(":", 1)
+        conn = http.client.HTTPConnection(host, int(port_str), timeout=timeout)
+    else:
         raise FileNotFoundError(f"RC socket not found: {rc_sock_path}")
-    conn = _UnixHTTPConnection(rc_sock_path, timeout=timeout)
     try:
         body = json.dumps(payload or {}).encode("utf-8")
         path = endpoint if endpoint.startswith("/") else f"/{endpoint}"
@@ -453,8 +486,11 @@ class VFSSupervisor:
         storage_cache_dir: str,
         cap_rclone: str,
         rc_sock: str,
+        rc_addr: Optional[str] = None,
     ) -> List[str]:
         """Build the supervised rclone mount command line."""
+        if not rc_addr:
+            rc_addr = _allocate_rc_addr()
         return [
             self.config.rclone_bin,
             "mount",
@@ -472,8 +508,8 @@ class VFSSupervisor:
             "1h",
             "--allow-other",
             "--rc",
-            "--rc-unix",
-            rc_sock,
+            "--rc-addr",
+            rc_addr,
             "--rc-no-auth",
         ]
 
@@ -501,8 +537,6 @@ class VFSSupervisor:
                         meta = self.get_storage_meta(storeid)
                         conf_path, _ = self.write_rclone_config(storeid, meta)
                         managed.cmd[managed.cmd.index("--config") + 1] = conf_path
-                        if os.path.exists(managed.rc_sock):
-                            os.unlink(managed.rc_sock)
                         managed.process = subprocess.Popen(
                             managed.cmd,
                             stdout=subprocess.DEVNULL,
@@ -596,6 +630,8 @@ class VFSSupervisor:
         rc_sock = self._rc_sock_path(safe_storeid)
         if os.path.exists(rc_sock):
             os.unlink(rc_sock)
+        rc_addr = _allocate_rc_addr()
+        atomic_write_text(rc_sock, rc_addr + "\n", mode=0o600)
 
         rclone_resolved = shutil.which(self.config.rclone_bin) or (
             self.config.rclone_bin if os.path.isfile(self.config.rclone_bin) else None
@@ -613,6 +649,7 @@ class VFSSupervisor:
             storage_cache_dir=storage_cache_dir,
             cap_rclone=cap_info["cap_rclone"],
             rc_sock=rc_sock,
+            rc_addr=rc_addr,
         )
         cmd[0] = rclone_resolved
 
@@ -623,16 +660,21 @@ class VFSSupervisor:
         )
 
         # Wait briefly to catch immediate startup failures.
-        deadline = time.time() + 1.0
+        deadline = time.time() + 2.0
         while time.time() < deadline:
             if proc.poll() is not None:
+                if os.path.exists(rc_sock):
+                    try:
+                        os.unlink(rc_sock)
+                    except OSError:
+                        pass
                 stderr_out = (proc.stderr.read() if proc.stderr else b"").decode(
                     "utf-8", errors="replace"
                 ).strip()
                 raise RuntimeError(
                     f"rclone mount failed immediately (rc={proc.returncode}): {stderr_out}"
                 )
-            if os.path.exists(rc_sock) or os.path.ismount(mount_point):
+            if os.path.ismount(mount_point) or _rc_reachable(rc_addr):
                 break
             time.sleep(0.05)
 

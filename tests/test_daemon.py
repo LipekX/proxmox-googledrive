@@ -404,16 +404,19 @@ def _generate_test_rsa_keypair(tmp_dir: str) -> Tuple[str, str]:
 
 
 def _create_mock_rclone_script(tmp_dir: str) -> str:
-    """Create a tiny Python mock rclone executable that opens --rc-unix and sleeps."""
+    """Create a tiny Python mock rclone executable that opens --rc-addr or --rc-unix and sleeps."""
     script_path = os.path.join(tmp_dir, "mock-rclone")
     code = """#!/usr/bin/env python3
 import http.server, json, os, signal, socketserver, sys, time
 
 rc_sock = None
+rc_addr = None
 args = sys.argv[1:]
 for idx, arg in enumerate(args):
     if arg == "--rc-unix" and idx + 1 < len(args):
         rc_sock = args[idx + 1]
+    elif arg == "--rc-addr" and idx + 1 < len(args):
+        rc_addr = args[idx + 1]
 
 if len(args) >= 2 and args[0] == "obscure":
     print("OBSCURED_" + args[1])
@@ -426,37 +429,45 @@ def _sig(_s, _f):
 signal.signal(signal.SIGTERM, _sig)
 signal.signal(signal.SIGINT, _sig)
 
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def address_string(self): return "mock"
+    def log_message(self, *a): return
+    def do_POST(self):
+        ln = int(self.headers.get("Content-Length") or 0)
+        if ln: self.rfile.read(ln)
+        if self.path == "/vfs/stats":
+            body = {"diskCache": {"bytesUsed": 4096, "uploadsInProgress": 0, "uploadsQueued": 0}}
+        elif self.path == "/core/stats":
+            body = {"transferring": [], "fatalError": 0, "errors": 0}
+        elif self.path == "/vfs/queue":
+            body = {"queue": []}
+        else:
+            body = {}
+        raw = json.dumps(body).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(raw)
+
 srv = None
-if rc_sock:
+if rc_addr:
+    host, port_s = rc_addr.rsplit(":", 1)
+    class TS(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+    srv = TS((host, int(port_s)), H)
+    srv.timeout = 0.2
+    while not stop:
+        srv.handle_request()
+    srv.server_close()
+elif rc_sock:
     if os.path.exists(rc_sock):
         os.unlink(rc_sock)
-
-    class H(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-        def address_string(self): return "unix"
-        def log_message(self, *a): return
-        def do_POST(self):
-            ln = int(self.headers.get("Content-Length") or 0)
-            if ln: self.rfile.read(ln)
-            if self.path == "/vfs/stats":
-                body = {"diskCache": {"bytesUsed": 4096, "uploadsInProgress": 0, "uploadsQueued": 0}}
-            elif self.path == "/core/stats":
-                body = {"transferring": [], "fatalError": 0, "errors": 0}
-            elif self.path == "/vfs/queue":
-                body = {"queue": []}
-            else:
-                body = {}
-            raw = json.dumps(body).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(raw)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(raw)
-
     class S(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         daemon_threads = True
-
     srv = S(rc_sock, H)
     srv.timeout = 0.2
     while not stop:
