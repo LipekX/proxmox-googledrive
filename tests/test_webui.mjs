@@ -360,7 +360,7 @@ function loadWebUiWithMocks() {
       Utils: {
         API2Request(opts) {
           apiCalls.push(opts);
-          if (opts.url === '/api2/json/gdrive/accounts' && opts.success) {
+          if (opts.url === '/api2/extjs/gdrive/accounts' && opts.success) {
             opts.success({
               result: {
                 data: {
@@ -370,7 +370,7 @@ function loadWebUiWithMocks() {
                 },
               },
             });
-          } else if (opts.url === '/api2/json/gdrive/oauth/start' && opts.method === 'POST' && opts.success) {
+          } else if (opts.url === '/api2/extjs/gdrive/oauth/start' && opts.method === 'POST' && opts.success) {
             opts.success({
               result: {
                 data: {
@@ -379,7 +379,7 @@ function loadWebUiWithMocks() {
                 },
               },
             });
-          } else if (opts.url === '/api2/json/gdrive/oauth/finish' && opts.method === 'POST' && opts.success) {
+          } else if (opts.url === '/api2/extjs/gdrive/oauth/finish' && opts.method === 'POST' && opts.success) {
             opts.success({
               result: {
                 data: {
@@ -392,7 +392,7 @@ function loadWebUiWithMocks() {
                 },
               },
             });
-          } else if (opts.url === '/api2/json/gdrive/accounts/service-account' && opts.method === 'POST' && opts.success) {
+          } else if (opts.url === '/api2/extjs/gdrive/accounts/service-account' && opts.method === 'POST' && opts.success) {
             opts.success({
               result: {
                 data: {
@@ -405,11 +405,11 @@ function loadWebUiWithMocks() {
                 },
               },
             });
-          } else if (opts.url === '/api2/json/gdrive/accounts/personal/drives' && opts.success) {
+          } else if (opts.url === '/api2/extjs/gdrive/accounts/personal/drives' && opts.success) {
             opts.success({
               result: { data: { drives: [{ id: 'drv1', name: 'Team Backups' }] } },
             });
-          } else if (opts.url === '/api2/json/gdrive/queue' && opts.success) {
+          } else if (opts.url === '/api2/extjs/gdrive/queue' && opts.success) {
             opts.success({
               result: {
                 data: {
@@ -499,7 +499,7 @@ test('ui: registers gdrive storageSchema and GDriveInputPanel with expected fiel
   // Verify setValues loads drives and maps async_upload back to wait_for_upload
   const loaded = panel.setValues({ account: 'personal', async_upload: 1, encrypt: 1 });
   assert.equal(loaded.wait_for_upload, false);
-  assert.ok(apiCalls.some((c) => c.url === '/api2/json/gdrive/accounts/personal/drives'));
+  assert.ok(apiCalls.some((c) => c.url === '/api2/extjs/gdrive/accounts/personal/drives'));
 });
 
 test('ui: ContentView hooks add Queue/Cache indicator and Import button for gdrive iso/vztmpl', () => {
@@ -512,8 +512,8 @@ test('ui: ContentView hooks add Queue/Cache indicator and Import button for gdri
   });
   view.initComponent();
 
-  assert.ok(apiCalls.some((c) => c.url === '/api2/json/gdrive/queue'));
-  assert.ok(apiCalls.some((c) => c.url === '/api2/json/gdrive/accounts'));
+  assert.ok(apiCalls.some((c) => c.url === '/api2/extjs/gdrive/queue'));
+  assert.ok(apiCalls.some((c) => c.url === '/api2/extjs/gdrive/accounts'));
   assert.equal(view._toolbarItems.length, 3);
   const importBtn = view._toolbarItems[0];
   const queueText = view._toolbarItems[2];
@@ -564,7 +564,7 @@ test('ui: AuthWizardWindow supports OAuth redirect URL and Service Account JSON 
   saJsonField.setValue('http://127.0.0.1:53682/?state=st-test-123&code=4/0AeanS_test_code');
   saveBtn.handler();
 
-  const oauthFinishCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/oauth/finish');
+  const oauthFinishCall = apiCalls.find((c) => c.url === '/api2/extjs/gdrive/oauth/finish');
   assert.ok(oauthFinishCall);
   assert.equal(oauthFinishCall.params.state, 'st-test-123');
   assert.equal(
@@ -592,13 +592,13 @@ test('ui: AuthWizardWindow supports OAuth redirect URL and Service Account JSON 
   picker.items[3].setValue('file123');
   picker.buttons[0].handler();
 
-  const saCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/accounts/service-account');
+  const saCall = apiCalls.find((c) => c.url === '/api2/extjs/gdrive/accounts/service-account');
   assert.ok(saCall);
   assert.equal('account_id' in saCall.params, false);
   assert.ok(saCall.params.service_account_json.includes('service_account'));
   assert.equal(createdAccount.id, 'sa-1');
 
-  const pickerCall = apiCalls.find((c) => c.url === '/api2/json/gdrive/picker/import');
+  const pickerCall = apiCalls.find((c) => c.url === '/api2/extjs/gdrive/picker/import');
   assert.ok(pickerCall);
   assert.equal('account' in pickerCall.params, false);
   assert.equal('access_token' in pickerCall.params, false);

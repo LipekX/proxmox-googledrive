@@ -312,6 +312,14 @@ sub options {
     };
 }
 
+sub check_config {
+    my ($self, $sectionId, $config, $create, $skipSchemaCheck) = @_;
+    if ($create && (!defined($config->{path}) || $config->{path} eq '')) {
+        $config->{path} = _mount_path($config, $sectionId);
+    }
+    return $self->SUPER::check_config($sectionId, $config, $create, $skipSchemaCheck);
+}
+
 sub path {
     my ($class, $scfg, $volname, $storeid, $snapname) = @_;
     my $mnt = _mount_path($scfg, $storeid);
@@ -405,6 +413,19 @@ sub on_update_hook {
         $scfg->{root_folder_id} = $res->{root_folder_id};
     }
 
+    return;
+}
+
+sub on_update_hook_full {
+    my ($class, $storeid, $scfg, $update, $delete, $sensitive) = @_;
+    my %merged = ( %{$scfg || {}}, %{$update || {}} );
+    if (ref($delete) eq 'ARRAY') {
+        delete $merged{$_} for @$delete;
+    }
+    $class->on_update_hook($storeid, \%merged, %{ $sensitive || {} });
+    if (defined $merged{root_folder_id}) {
+        $update->{root_folder_id} = $merged{root_folder_id};
+    }
     return;
 }
 

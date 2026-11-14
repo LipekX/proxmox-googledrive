@@ -27,7 +27,7 @@ from .oauth import OAuthManager
 
 # Rclone's documented public fixed AES-256-CTR obscure key.
 _RCLONE_OBSCURE_KEY_HEX = (
-    "9c935b48730a554d6bfd7c63c886b92bd390198eb8128afbf4de162b8b95f638"
+    "9c935b48730a554d6bfd7c63c886a92bd390198eb8128afbf4de162b8b95f638"
 )
 _AUTO_CAP_MAX_BYTES = 20 * 1024**3  # 20 GiB
 _AUTO_CAP_FREE_RATIO = 0.25

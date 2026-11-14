@@ -96,7 +96,11 @@
          */
         apiRequest: function (opts) {
             if (Proxmox && Proxmox.Utils && typeof Proxmox.Utils.API2Request === 'function') {
-                return Proxmox.Utils.API2Request(opts);
+                var reqOpts = Ext && typeof Ext.apply === 'function' ? Ext.apply({}, opts) : Object.assign({}, opts);
+                if (typeof reqOpts.url === 'string') {
+                    reqOpts.url = reqOpts.url.replace(/^\/api2\/json\//, '/api2/extjs/');
+                }
+                return Proxmox.Utils.API2Request(reqOpts);
             }
             throw new Error('Proxmox.Utils.API2Request is not available.');
         },
