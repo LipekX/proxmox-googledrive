@@ -828,129 +828,136 @@
      *  - "Import from Google Drive" button on iso/vztmpl views for drive.file accounts
      */
     PVE.gdrive.installContentViewHooks = function () {
-        if (!PVE.storage || !PVE.storage.ContentView || PVE.gdrive._contentHooksInstalled) {
+        if (
+            !PVE.storage ||
+            !PVE.storage.ContentView ||
+            !PVE.storage.ContentView.prototype ||
+            PVE.gdrive._contentHooksInstalled
+        ) {
+            return;
+        }
+        var origInitComponent = PVE.storage.ContentView.prototype.initComponent;
+        if (typeof origInitComponent !== 'function') {
             return;
         }
         PVE.gdrive._contentHooksInstalled = true;
 
-        Ext.override(PVE.storage.ContentView, {
-            initComponent: function () {
-                var me = this;
-                me.callParent(arguments);
+        PVE.storage.ContentView.prototype.initComponent = function () {
+            var me = this;
+            origInitComponent.apply(me, arguments);
 
-                if (!Utils.isGDriveStorage(me)) {
-                    return;
-                }
+            if (!Utils.isGDriveStorage(me)) {
+                return;
+            }
 
-                var queueIndicator = Ext.create('Ext.toolbar.TextItem', {
-                    text: _('Drive: checking...'),
-                });
+            var queueIndicator = Ext.create('Ext.toolbar.TextItem', {
+                text: _('Drive: checking...'),
+            });
 
-                var importBtn = Ext.create('Ext.button.Button', {
-                    text: _('Import from Google Drive'),
-                    iconCls: 'fa fa-cloud-download',
-                    hidden: true,
-                    handler: function () {
-                        Ext.create('PVE.gdrive.PickerModal', {
-                            storeid: me.storage,
-                            account: me._gdriveAccount || null,
-                            targetType: me.content === 'vztmpl' ? 'vztmpl' : 'iso',
-                            onImported: function () {
-                                if (me.store && typeof me.store.reload === 'function') {
-                                    me.store.reload();
-                                }
-                            },
-                        }).show();
+            var importBtn = Ext.create('Ext.button.Button', {
+                text: _('Import from Google Drive'),
+                iconCls: 'fa fa-cloud-download',
+                hidden: true,
+                handler: function () {
+                    Ext.create('PVE.gdrive.PickerModal', {
+                        storeid: me.storage,
+                        account: me._gdriveAccount || null,
+                        targetType: me.content === 'vztmpl' ? 'vztmpl' : 'iso',
+                        onImported: function () {
+                            if (me.store && typeof me.store.reload === 'function') {
+                                me.store.reload();
+                            }
+                        },
+                    }).show();
+                },
+            });
+
+            var refreshQueueStatus = function () {
+                Utils.apiRequest({
+                    url: '/api2/json/gdrive/queue',
+                    method: 'GET',
+                    success: function (response) {
+                        var data = (response.result && response.result.data) || {};
+                        var uploads = Array.isArray(data.uploads) ? data.uploads : [];
+                        var stInfo = (data.storages && data.storages[me.storage]) || {};
+                        var storeUploads = uploads.filter(function (u) {
+                            return !u.storeid || u.storeid === me.storage;
+                        });
+                        var queueText = storeUploads.length
+                            ? _('Uploading ') + storeUploads.length + _(' file(s)')
+                            : _('Idle');
+                        var cacheText = '';
+                        if (stInfo.cache_used !== undefined) {
+                            cacheText =
+                                ' | ' +
+                                _('Cache: ') +
+                                Utils.formatBytes(stInfo.cache_used) +
+                                (stInfo.cache_max
+                                    ? ' / ' + Utils.formatBytes(stInfo.cache_max)
+                                    : '');
+                        }
+                        queueIndicator.setText(_('Drive: ') + queueText + cacheText);
+                    },
+                    failure: function () {
+                        queueIndicator.setText(_('Drive: status unavailable'));
                     },
                 });
+            };
 
-                var refreshQueueStatus = function () {
-                    Utils.apiRequest({
-                        url: '/api2/json/gdrive/queue',
-                        method: 'GET',
-                        success: function (response) {
-                            var data = (response.result && response.result.data) || {};
-                            var uploads = Array.isArray(data.uploads) ? data.uploads : [];
-                            var stInfo = (data.storages && data.storages[me.storage]) || {};
-                            var storeUploads = uploads.filter(function (u) {
-                                return !u.storeid || u.storeid === me.storage;
-                            });
-                            var queueText = storeUploads.length
-                                ? _('Uploading ') + storeUploads.length + _(' file(s)')
-                                : _('Idle');
-                            var cacheText = '';
-                            if (stInfo.cache_used !== undefined) {
-                                cacheText =
-                                    ' | ' +
-                                    _('Cache: ') +
-                                    Utils.formatBytes(stInfo.cache_used) +
-                                    (stInfo.cache_max
-                                        ? ' / ' + Utils.formatBytes(stInfo.cache_max)
-                                        : '');
-                            }
-                            queueIndicator.setText(_('Drive: ') + queueText + cacheText);
-                        },
-                        failure: function () {
-                            queueIndicator.setText(_('Drive: status unavailable'));
-                        },
-                    });
-                };
-
-                var checkPickerEligibility = function () {
-                    var isMediaView =
-                        !me.content || me.content === 'iso' || me.content === 'vztmpl';
-                    if (!isMediaView) {
-                        importBtn.setHidden(true);
-                        return;
-                    }
-                    Utils.apiRequest({
-                        url: '/api2/json/gdrive/accounts',
-                        method: 'GET',
-                        success: function (response) {
-                            var accounts =
-                                (response.result && response.result.data && response.result.data.accounts) || [];
-                            var storageAccountId =
-                                me.storageInfo && me.storageInfo.account
-                                    ? me.storageInfo.account
-                                    : null;
-                            var matched = null;
-                            for (var i = 0; i < accounts.length; i += 1) {
-                                if (!storageAccountId || accounts[i].id === storageAccountId) {
-                                    matched = accounts[i];
-                                    break;
-                                }
-                            }
-                            if (matched) {
-                                me._gdriveAccount = matched.id;
-                                var scopeStr = String(matched.scope || '');
-                                var isDriveFile =
-                                    scopeStr.indexOf('drive.file') !== -1 || scopeStr === '';
-                                importBtn.setHidden(!isDriveFile);
-                            }
-                        },
-                    });
-                };
-
-                var toolbar =
-                    typeof me.getDockedItems === 'function'
-                        ? me.getDockedItems('toolbar[dock="top"]')[0]
-                        : null;
-                if (toolbar && typeof toolbar.add === 'function') {
-                    toolbar.add(importBtn, '->', queueIndicator);
+            var checkPickerEligibility = function () {
+                var isMediaView =
+                    !me.content || me.content === 'iso' || me.content === 'vztmpl';
+                if (!isMediaView) {
+                    importBtn.setHidden(true);
+                    return;
                 }
-
-                refreshQueueStatus();
-                checkPickerEligibility();
-
-                me._gdriveQueueTimer = global.setInterval(refreshQueueStatus, 10000);
-                me.on('destroy', function () {
-                    if (me._gdriveQueueTimer) {
-                        global.clearInterval(me._gdriveQueueTimer);
-                        me._gdriveQueueTimer = null;
-                    }
+                Utils.apiRequest({
+                    url: '/api2/json/gdrive/accounts',
+                    method: 'GET',
+                    success: function (response) {
+                        var accounts =
+                            (response.result && response.result.data && response.result.data.accounts) || [];
+                        var storageAccountId =
+                            me.storageInfo && me.storageInfo.account
+                                ? me.storageInfo.account
+                                : null;
+                        var matched = null;
+                        for (var i = 0; i < accounts.length; i += 1) {
+                            if (!storageAccountId || accounts[i].id === storageAccountId) {
+                                matched = accounts[i];
+                                break;
+                            }
+                        }
+                        if (matched) {
+                            me._gdriveAccount = matched.id;
+                            var scopeStr = String(matched.scope || '');
+                            var isDriveFile =
+                                scopeStr.indexOf('drive.file') !== -1 || scopeStr === '';
+                            importBtn.setHidden(!isDriveFile);
+                        }
+                    },
                 });
-            },
-        });
+            };
+
+            var toolbar =
+                typeof me.getDockedItems === 'function'
+                    ? me.getDockedItems('toolbar[dock="top"]')[0]
+                    : null;
+            if (toolbar && typeof toolbar.add === 'function') {
+                toolbar.add(importBtn, '->', queueIndicator);
+            }
+
+            refreshQueueStatus();
+            checkPickerEligibility();
+
+            me._gdriveQueueTimer = global.setInterval(refreshQueueStatus, 10000);
+            me.on('destroy', function () {
+                if (me._gdriveQueueTimer) {
+                    global.clearInterval(me._gdriveQueueTimer);
+                    me._gdriveQueueTimer = null;
+                }
+            });
+        };
     };
 
     runWhenReady(function () {
