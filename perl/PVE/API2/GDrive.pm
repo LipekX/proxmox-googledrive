@@ -175,6 +175,7 @@ __PACKAGE__->register_method({
     code => sub {
         return [
             { subdir => 'accounts' },
+            { subdir => 'oauth' },
             { subdir => 'queue' },
             { subdir => 'picker' },
         ];
@@ -328,7 +329,7 @@ __PACKAGE__->register_method({
 
 __PACKAGE__->register_method({
     name        => 'create_service_account',
-    path        => 'accounts/service-account',
+    path        => 'accounts/{account}',
     method      => 'POST',
     protected   => 1,
     description => 'Register a Google Service Account JSON credential profile.',
@@ -341,6 +342,12 @@ __PACKAGE__->register_method({
     parameters => {
         additionalProperties => 0,
         properties           => {
+            account => {
+                description => 'Account endpoint segment (service-account) or profile ID.',
+                type        => 'string',
+                pattern     => '[a-zA-Z0-9._@-]+',
+                optional    => 1,
+            },
             account_id => {
                 description => 'Optional profile ID for this service account.',
                 type        => 'string',
@@ -364,8 +371,16 @@ __PACKAGE__->register_method({
         my $payload = {
             service_account_json => $param->{service_account_json},
         };
-        $payload->{account_id} = $param->{account_id}
-            if defined $param->{account_id} && $param->{account_id} ne '';
+        my $acct_id = $param->{account_id};
+        if ((!defined($acct_id) || $acct_id eq '')
+            && defined($param->{account})
+            && $param->{account} ne ''
+            && $param->{account} ne 'service-account')
+        {
+            $acct_id = $param->{account};
+        }
+        $payload->{account_id} = $acct_id
+            if defined $acct_id && $acct_id ne '';
         return _ipc_request('POST', '/v1/accounts/service-account', $payload);
     },
 });

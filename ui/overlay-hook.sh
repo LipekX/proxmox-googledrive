@@ -162,9 +162,11 @@ do_install_perl_api() {
   done < "$file"
 
   local last_idx=-1
-  local i
+  local i trimmed
   for (( i=${#lines[@]}-1; i>=0; i-- )); do
-    if [[ "${lines[$i]}" =~ ^[[:space:]]*1\;[[:space:]]*$ ]]; then
+    trimmed="${lines[$i]#"${lines[$i]%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    if [[ "$trimmed" == "1;" ]]; then
       last_idx=$i
       break
     fi

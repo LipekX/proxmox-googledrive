@@ -445,6 +445,11 @@ sub register_api2 {
     return 1 if $API2_REGISTERED;
     my $ok = eval {
         if ($INC{'PVE/API2.pm'} || PVE::API2->can('register_method')) {
+            require PVE::RESTHandler;
+            if (!PVE::API2->isa('PVE::RESTHandler')) {
+                no strict 'refs';
+                push @{'PVE::API2::ISA'}, 'PVE::RESTHandler';
+            }
             require PVE::API2::GDrive;
             my $already = 0;
             if (PVE::API2->can('method_attributes')) {
@@ -461,6 +466,7 @@ sub register_api2 {
         }
         1;
     };
+    warn "pve-storage-gdrive register_api2 error: $@\n" if $@;
     return $ok ? 1 : 0;
 }
 

@@ -6,9 +6,26 @@ use PVE::JSONSchema;
 use PVE::RPCEnvironment;
 
 my %METHODS;
+my %PATH_LOOKUP;
 
 sub register_method {
     my ($class, $info) = @_;
+    $PATH_LOOKUP{$class} ||= {};
+    my $lookup = $PATH_LOOKUP{$class};
+    for my $comp (split(/\/+/, $info->{path} // '')) {
+        next if $comp eq '';
+        if ($comp =~ /^\{([\w-]+)(?::(.*))?\}$/) {
+            die "register method ${class}/$info->{path} - path match error - regex and fixed items\n"
+                if defined($lookup->{folders});
+            $lookup->{regex} ||= {};
+            $lookup = $lookup->{regex};
+        } else {
+            die "register method ${class}/$info->{path} - path match error - regex and fixed items\n"
+                if defined($lookup->{regex});
+            $lookup->{folders}->{$comp} ||= {};
+            $lookup = $lookup->{folders}->{$comp};
+        }
+    }
     $METHODS{$class} ||= [];
     push @{$METHODS{$class}}, $info;
 }
