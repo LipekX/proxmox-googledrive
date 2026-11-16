@@ -2,8 +2,8 @@
 set -euo pipefail
 
 PKG_NAME="pve-storage-gdrive"
-ONE_LINER='bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)"'
-RELEASE_BASE="${PVE_GDRIVE_RELEASE_BASE:-https://github.com/LipekX/proxmox-gdrive/releases}"
+ONE_LINER='bash -c "$(curl -fsSL https://raw.githubusercontent.com/LipekX/proxmox-googledrive/main/scripts/install.sh)"'
+RELEASE_BASE="${PVE_GDRIVE_RELEASE_BASE:-https://github.com/LipekX/proxmox-googledrive/releases}"
 SHA256SUMS_URL_OVERRIDE="${PVE_GDRIVE_SHA256SUMS_URL:-}"
 
 VERSION=""
@@ -222,7 +222,7 @@ do_install() {
 
     echo "================================================================"
     echo " pve-storage-gdrive installer for Proxmox VE 8.x & 9.x"
-    echo " Source: https://github.com/LipekX/proxmox-gdrive"
+    echo " Source: https://github.com/LipekX/proxmox-googledrive"
     echo " One-liner: $ONE_LINER"
     echo "----------------------------------------------------------------"
     echo " Disclaimer: Unofficial community plugin (AGPL-3.0-or-later)."

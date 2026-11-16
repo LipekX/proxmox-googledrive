@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Proxmox GDrive Contributors <maintainers@lipa.run>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.2
-Homepage: https://github.com/LipekX/proxmox-gdrive
+Homepage: https://github.com/LipekX/proxmox-googledrive
 
 Package: pve-storage-gdrive
 Architecture: all

@@ -33,26 +33,26 @@
 
 ## Quick Install
 
-Run on each Proxmox VE node as `root`:
+Run on each Proxmox VE node as `root` (downloads and SHA-256 verifies the `.deb` from [GitHub Releases](https://github.com/LipekX/proxmox-googledrive/releases)):
 
 ```bash
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/LipekX/proxmox-googledrive/main/scripts/install.sh)"
 ```
 
 ### Installer Options
 
 ```bash
 # Install a specific release version
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --version 0.1.0-2
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/LipekX/proxmox-googledrive/main/scripts/install.sh)" -- --version 0.5.0-1
 
 # Install from a custom .deb URL (still verifies SHA256SUMS)
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --deb-url https://example.com/pve-storage-gdrive_0.1.0-2_all.deb
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/LipekX/proxmox-googledrive/main/scripts/install.sh)" -- --deb-url https://example.com/pve-storage-gdrive_0.5.0-1_all.deb
 
 # Non-interactive install
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --yes
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/LipekX/proxmox-googledrive/main/scripts/install.sh)" -- --yes
 
 # Uninstall (preserves /etc/pve/priv/gdrive credentials and remote Drive files)
-bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --uninstall
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/LipekX/proxmox-googledrive/main/scripts/install.sh)" -- --uninstall
 ```
 
 ### Local Install (from `git clone`)
@@ -60,8 +60,8 @@ bash -c "$(curl -fsSL https://install.lipa.run/proxmox-gdrive.sh)" -- --uninstal
 If you want to build and install directly from a local checkout:
 
 ```bash
-git clone https://github.com/LipekX/proxmox-gdrive.git
-cd proxmox-gdrive
+git clone https://github.com/LipekX/proxmox-googledrive.git
+cd proxmox-googledrive
 sudo ./local_install.sh
 ```
 

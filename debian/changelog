@@ -1,3 +1,15 @@
+pve-storage-gdrive (0.5.0-1) bookworm; urgency=medium
+
+  * Add per-storage write_bwlimit (cgroup v2 io.max) throttling and automatic
+    cache-overflow backpressure so local writes match upload bandwidth.
+  * Tune rclone VFS caching (--dir-cache-time 30m, --vfs-fast-fingerprint,
+    --drive-chunk-size 64M, --vfs-cache-max-age 10m, --vfs-cache-poll-interval 15s).
+  * Fix Proxmox VE 9.x ExtJS API2Request /api2/extjs routing, ContentView
+    callParent chain, Shared Drive combobox sentinel value, and rclone --rc-addr.
+  * Add debian/postrm to cleanly restart PVE services after uninstall.
+
+ -- Proxmox GDrive Contributors <maintainers@lipa.run>  Mon, 16 Nov 2026 13:10:00 +0100
+
 pve-storage-gdrive (0.1.0-2) bookworm; urgency=medium
 
   * Rework Google authentication to support simple one-time OAuth2 login in
