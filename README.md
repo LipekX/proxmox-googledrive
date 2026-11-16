@@ -1,8 +1,33 @@
 # Proxmox Google Drive Adapter
 
-Native **Google Drive** storage backend plugin (`pve-storage-gdrive`) for **Proxmox VE 8.x and 9.x** (`AGPL-3.0-or-later`).
+> **Native Google Drive storage backend (`pve-storage-gdrive`) for Proxmox VE 8.x & 9.x** — mount Google **My Drive** or **Shared Drives** as a first-class Proxmox storage target for `vzdump` backups, ISO images, and LXC container templates.
 
-Mount your Google **My Drive** or **Shared Drives** as a first-class Proxmox storage target for `vzdump` backups, ISO images, and LXC container templates — complete with a Web UI wizard, Easy Google Sign-In, optional `rclone crypt` client-side encryption, and synchronous upload verification for `vzdump`.
+---
+
+## Highlights & Key Features
+
+- **Native Proxmox VE Integration** — Appears directly under **Datacenter -> Storage -> Add -> Google Drive** with full `pvesm`, Web UI Summary, Backups, ISO Images, and CT Templates support.
+- **One-Time Easy Google Sign-In** — Log in once via `pve-gdrive login` or the Web UI **Sign in with Google** wizard. No Google Cloud project, IAM roles, or Service Account JSON setup required *(Service Accounts and `rclone authorize` tokens are still supported for power users)*.
+- **My Drive, Shared Drives & Pinned Folders** — Target **My Drive** or any **Shared Drive** with optional subfolder isolation. Folder IDs are pinned on initialization so duplicate `proxmox/` folders are never created.
+- **Client-Side Encryption (`rclone crypt`)** — Optional zero-knowledge filename and payload encryption before files ever leave your Proxmox node.
+- **Synchronous `vzdump` Upload Verification** — `vzdump-gdrive-hook.pl` waits for `rclone` to finish uploading each backup to Google Drive and fails loudly if an upload errors or times out.
+- **Write Speed Throttling & Cache Overflow Protection** — Configure `write_bwlimit` (**Max Write Speed**) per storage using Linux cgroup v2 `io.max` so local writes match your upload bandwidth, backed by automatic backpressure when cache usage approaches its cap or disk free space drops below 1 GiB.
+- **Live Upload & Cache Telemetry** — Real-time **Drive: Uploading ... | Cache: ...** status indicator in the Proxmox Web UI toolbar plus `pve-gdrive queue` and `pve-gdrive status` CLI commands.
+- **Cluster-Ready (`pmxcfs`)** — Storage definitions, account profiles, and encryption keys replicate automatically across cluster nodes via `/etc/pve`, while short-lived access tokens refresh strictly in memory without churning `pmxcfs`.
+- **Clean Install & Uninstall** — Packaged as a lightweight `Architecture: all` `.deb` with SHA-256 verification and clean removal that preserves your credentials and remote Drive files.
+
+---
+
+## Screenshots
+
+### Storage Configuration Wizard
+![Add Google Drive Storage Wizard](img/settings.png)
+
+### Live Quota & Storage Summary
+![Proxmox Storage Summary for Google Drive](img/storage-view.png)
+
+### Backups View & Live Upload Queue Indicator
+![Backups Tab with Live Drive Upload and Cache Status](img/backups.png)
 
 ---
 
@@ -44,37 +69,33 @@ Options: `--yes` (non-interactive), `--skip-build` (use existing `.deb` in `dist
 
 ---
 
-## One-Time Google Sign-In (CLI or Web UI — No Cloud Console Setup Needed)
+## One-Time Google Sign-In (CLI or Web UI)
 
-`pve-storage-gdrive` lets you log in **once** with your normal Google account using the built-in desktop OAuth client — no Google Cloud project, no Service Account IAM setup, and no periodic re-logins.
+`pve-storage-gdrive` lets you log in **once** with your standard Google account using the built-in desktop OAuth client — no periodic re-logins required.
 
 ### Option 1: Sign in via CLI (during install or anytime)
-
-Run on your Proxmox node:
 
 ```bash
 pve-gdrive login
 ```
 
 1. Open the printed Google Sign-In link in any browser on your computer or phone and click **Allow**.
-2. Your browser will redirect to `http://127.0.0.1:53682/?code=...` (even if the browser says *Unable to connect*, that is normal because your browser is not running on the Proxmox server).
+2. Your browser will redirect to `http://127.0.0.1:53682/?code=...` *(an "Unable to connect" page is normal if your browser is not running on the Proxmox server)*.
 3. Copy the full `http://127.0.0.1:53682/?code=...` URL from your browser's address bar and paste it into the terminal prompt.
 
 ### Option 2: Sign in via Proxmox Web UI
 
 1. Open the Proxmox Web UI -> **Datacenter -> Storage -> Add -> Google Drive**.
 2. Click **Sign in with Google** -> **1. Open Google Sign-In in Browser**.
-3. Copy the redirected `http://127.0.0.1:53682/?code=...` URL from your browser's address bar and paste it into the dialog.
+3. Copy the redirected `http://127.0.0.1:53682/?code=...` URL and paste it into the dialog.
 
-*(Power users can also paste the output of `rclone authorize "drive"` or a Service Account JSON key into the same field.)*
-
-Account profiles (with your long-lived `refresh_token`) are stored atomically in `/etc/pve/priv/gdrive/accounts/<id>.json` (protected by `pmxcfs` `/etc/pve/priv`). Short-lived access tokens are refreshed automatically in memory by `pve-gdrived`, so routine token refreshes never churn `/etc/pve` (`pmxcfs`).
+*(Power users can also paste `rclone authorize "drive"` output or a Service Account JSON key into the same field.)*
 
 ---
 
-## Google Drive `proxmox/` Folder Layout
+## Google Drive Folder Layout
 
-On storage initialization, `pve-gdrived` resolves or creates a single `proxmox/` root folder (or an optional configured subfolder inside `proxmox/`) and pins its Google Drive `folder_id` (`root_folder_id`) to prevent duplicate folders:
+On storage initialization, `pve-gdrived` resolves or creates a single `proxmox/` root folder (or an optional configured subfolder inside `proxmox/`) and pins its Google Drive `folder_id` (`root_folder_id`):
 
 ```text
 Google Drive (My Drive or Shared Drive)
@@ -85,26 +106,20 @@ Google Drive (My Drive or Shared Drive)
         └── cache/                # LXC container templates (vztmpl)
 ```
 
-Supported Proxmox content types are strictly `backup`, `iso`, and `vztmpl` (`images` and `rootdir` VM/CT disks are intentionally excluded).
-
-### Optional Client-Side Encryption (`rclone crypt`)
-
-Enable **Client-Side Encryption** when adding a storage to wrap the Google Drive remote in an `rclone crypt` layer. The passphrase is stored per-storage under `/etc/pve/priv/gdrive/storages/<storeid>.crypt.json` (`0600`). Back up this passphrase independently — without it, encrypted backups in Drive cannot be recovered.
+Supported Proxmox content types are `backup`, `iso`, and `vztmpl` (`images` and `rootdir` VM/CT disks are intentionally excluded).
 
 ---
 
-## `vzdump` Synchronous Upload Hook
+## Cache Control, Write Throttling & `vzdump` Hook
 
-By default (`async_upload: 0`), Proxmox backups staged through the `rclone` VFS full cache (`/var/cache/pve-gdrive`) are verified before `vzdump` reports success:
-
-- Configure `/etc/vzdump.conf` (or pass `--script` to `vzdump`):
+- **Auto Cache Cap**: When `cache_max_size` is unset, `pve-gdrived` computes `min(20G, 25% of free space)` on `cache_dir`.
+- **Write Speed Limit (`write_bwlimit`)**: Set **Max Write Speed** (e.g. `20M`, `50M`) to throttle local cache writes via Linux cgroup v2 `io.max` so `vzdump` does not outpace your upload connection and fill the node's disk.
+- **Automatic Backpressure**: If cache usage reaches `90%` of `cache_max_size` or free disk space drops below `1 GiB`, `pve-gdrived` automatically throttles write I/O to `2 MiB/s` until `rclone` catches up and evicts uploaded files.
+- **Synchronous `vzdump` Verification**: Add the hook to `/etc/vzdump.conf` (or pass `--script` to `vzdump`) so each backup waits for Google Drive upload confirmation before the next VM starts:
   ```text
   script: /usr/libexec/pve-gdrive/vzdump-gdrive-hook.pl
   ```
-- On the `backup-end` phase, `vzdump-gdrive-hook.pl` checks whether the target storage uses `type: gdrive` and calls `POST /v1/uploads/wait` on `/run/pve-gdrived.sock`.
-- If the upload to Google Drive fails or times out, the hook exits non-zero so `vzdump` fails loudly instead of reporting a false-positive backup.
-- Set `async_upload 1` on the storage definition if you prefer `vzdump` to return immediately while `rclone` uploads in the background.
-- When `cache_max_size` is unset, `pve-gdrived` calculates a conservative auto-cap of `min(20G, 25% of free space)` on `cache_dir`.
+  Set `async_upload 1` on the storage definition if you prefer `vzdump` to return immediately while `rclone` uploads in the background.
 
 ---
 
@@ -113,10 +128,10 @@ By default (`async_upload: 0`), Proxmox backups staged through the `rclone` VFS 
 In a Proxmox VE cluster:
 
 1. `/etc/pve/storage.cfg` and `/etc/pve/priv/gdrive/` automatically replicate across all cluster nodes via `pmxcfs`.
-2. **Run the installer on every node in the cluster** so that `pve-gdrived`, the Perl storage/API plugins (`GDrivePlugin.pm`, `GDrive.pm`), `vzdump-gdrive-hook.pl`, and the Web UI overlay are present on every host.
+2. **Run the installer on every node in the cluster** so `pve-gdrived`, the Perl storage/API plugins (`GDrivePlugin.pm`, `GDrive.pm`), `vzdump-gdrive-hook.pl`, and the Web UI overlay are installed on every host.
 3. Each node runs its own local `pve-gdrived.service` and mounts active storages at `/mnt/pve/<storeid>`.
 
-Verify daemon and upload queue status from the CLI on any node:
+Check status from any node:
 
 ```bash
 pve-gdrive status
@@ -128,7 +143,7 @@ pve-gdrive queue
 
 ## Building from Source
 
-`pve-storage-gdrive` is `Architecture: all` (pure Python 3.11+ standard library daemon + Perl + ExtJS) and can be packaged on both Debian/Proxmox (`dpkg-deb`) and non-Debian Linux hosts such as Fedora (`tar` + `gzip` + `ar`):
+`pve-storage-gdrive` is `Architecture: all` (pure Python 3.11+ stdlib daemon + Perl + ExtJS) and can be packaged on both Debian/Proxmox (`dpkg-deb`) and non-Debian Linux hosts (`tar` + `gzip` + `ar`):
 
 ```bash
 # Run all test suites and syntax checks
