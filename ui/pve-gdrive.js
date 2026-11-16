@@ -581,6 +581,13 @@
                     emptyText: _('Auto (min 20G, 25% free)'),
                     deleteEmpty: !me.isCreate,
                 },
+                {
+                    xtype: 'proxmoxtextfield',
+                    name: 'write_bwlimit',
+                    fieldLabel: _('Max Write Speed'),
+                    emptyText: _('Unlimited (e.g. 20M, 50M)'),
+                    deleteEmpty: !me.isCreate,
+                },
             ];
 
             me.columnB = [
@@ -660,6 +667,9 @@
             }
             if (!out.drive_id || out.drive_id === '__my_drive__') {
                 delete out.drive_id;
+            }
+            if (!out.write_bwlimit && me.isCreate) {
+                delete out.write_bwlimit;
             }
 
             if (me.superclass) {

@@ -202,6 +202,9 @@ sub _storage_payload {
         (defined $scfg->{cache_max_size} && $scfg->{cache_max_size} ne ''
             ? (cache_max_size => $scfg->{cache_max_size})
             : ()),
+        (defined $scfg->{write_bwlimit} && $scfg->{write_bwlimit} ne ''
+            ? (write_bwlimit => $scfg->{write_bwlimit})
+            : ()),
         async_upload   => $scfg->{async_upload} ? 1 : 0,
         encrypt        => $scfg->{encrypt} ? 1 : 0,
         path           => _mount_path($scfg, $storeid),
@@ -272,6 +275,11 @@ sub properties {
             type => 'string',
             optional => 1,
         },
+        write_bwlimit => {
+            description => 'Max write speed to local VFS cache (e.g. 20M, 50M) so uploads can keep up.',
+            type => 'string',
+            optional => 1,
+        },
         async_upload => {
             description => 'If 1, vzdump returns before Google Drive upload completes (default 0 waits).',
             type => 'boolean',
@@ -301,6 +309,7 @@ sub options {
         root_folder_id => { optional => 1 },
         cache_dir      => { optional => 1 },
         cache_max_size => { optional => 1 },
+        write_bwlimit  => { optional => 1 },
         async_upload   => { optional => 1 },
         encrypt        => { optional => 1 },
         crypt_passphrase => { optional => 1 },

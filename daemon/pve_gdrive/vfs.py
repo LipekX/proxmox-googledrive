@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import logging
 import os
 import re
 import shutil
@@ -32,6 +33,10 @@ _RCLONE_OBSCURE_KEY_HEX = (
 )
 _AUTO_CAP_MAX_BYTES = 20 * 1024**3  # 20 GiB
 _AUTO_CAP_FREE_RATIO = 0.25
+_BACKPRESSURE_WBPS = 2 * 1024**2  # 2 MiB/s emergency write throttle when cache is near full
+_MIN_FREE_BYTES = 1024**3  # 1 GiB minimum free space before backpressure kicks in
+
+logger = logging.getLogger("pve-gdrived.vfs")
 
 _SIZE_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGTP]?i?B?)?\s*$", re.IGNORECASE)
 _SIZE_MULTIPLIERS = {
@@ -246,16 +251,197 @@ def _dir_size_bytes(path: str) -> int:
     return total
 
 
+def parse_write_bwlimit(value: Optional[str]) -> Optional[int]:
+    """Parse write_bwlimit (e.g. '20M', '50MiB') into bytes/sec, or None if unlimited/unset."""
+    text = str(value or "").strip()
+    if not text or text == "0":
+        return None
+    if text.lower().endswith("/s"):
+        text = text[:-2].strip()
+    parsed = parse_size(text)
+    return parsed if parsed > 0 else None
+
+
+def _whole_disks_for_dev(dev_str: str, visited: Optional[set[str]] = None) -> List[str]:
+    """Resolve a major:minor block device string to underlying whole-disk major:minor devices."""
+    if visited is None:
+        visited = set()
+    if dev_str in visited or not dev_str:
+        return []
+    visited.add(dev_str)
+
+    sys_block = os.path.join("/sys/dev/block", dev_str)
+    if not os.path.isdir(sys_block):
+        return []
+
+    slaves_dir = os.path.join(sys_block, "slaves")
+    if os.path.isdir(slaves_dir):
+        try:
+            slaves = os.listdir(slaves_dir)
+        except OSError:
+            slaves = []
+        if slaves:
+            found: List[str] = []
+            for slave in slaves:
+                dev_file = os.path.join(slaves_dir, slave, "dev")
+                if os.path.isfile(dev_file):
+                    try:
+                        with open(dev_file, "r", encoding="utf-8") as fh:
+                            found.extend(_whole_disks_for_dev(fh.read().strip(), visited))
+                    except OSError:
+                        pass
+            if found:
+                return found
+
+    part_file = os.path.join(sys_block, "partition")
+    parent_dev = os.path.join(sys_block, "..", "dev")
+    if os.path.exists(part_file) and os.path.isfile(parent_dev):
+        try:
+            with open(parent_dev, "r", encoding="utf-8") as fh:
+                parent_str = fh.read().strip()
+            if parent_str:
+                return _whole_disks_for_dev(parent_str, visited)
+        except OSError:
+            pass
+
+    return [dev_str]
+
+
+def _resolve_block_devices(path: str) -> List[str]:
+    """Return deduplicated whole-disk major:minor strings backing path, or [] if unavailable."""
+    try:
+        st = os.stat(_existing_stat_path(path))
+        maj = os.major(st.st_dev)
+        min_ = os.minor(st.st_dev)
+    except OSError:
+        return []
+    if maj == 0:
+        return []
+    devs = _whole_disks_for_dev(f"{maj}:{min_}")
+    return list(dict.fromkeys(devs))
+
+
+class _CgroupIOController:
+    """Best-effort cgroup v2 io.max write bandwidth controller for rclone child processes."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._base_dir: Optional[str] = None
+        self._initialized = False
+
+    def _ensure_init_locked(self) -> Optional[str]:
+        if self._initialized:
+            return self._base_dir
+        self._initialized = True
+        try:
+            if not os.path.isdir("/sys/fs/cgroup"):
+                return None
+            rel_cg = ""
+            with open("/proc/self/cgroup", "r", encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.strip().split(":", 2)
+                    if len(parts) == 3 and parts[0] == "0":
+                        rel_cg = parts[2].lstrip("/")
+                        break
+            if not rel_cg:
+                return None
+            cg_dir = os.path.join("/sys/fs/cgroup", rel_cg)
+            if os.path.basename(cg_dir) == "supervisor":
+                cg_dir = os.path.dirname(cg_dir)
+            controllers_file = os.path.join(cg_dir, "cgroup.controllers")
+            if not os.path.isfile(controllers_file):
+                return None
+            with open(controllers_file, "r", encoding="utf-8") as fh:
+                controllers = fh.read().split()
+            if "io" not in controllers:
+                return None
+
+            sup_dir = os.path.join(cg_dir, "supervisor")
+            os.makedirs(sup_dir, exist_ok=True)
+            with open(os.path.join(sup_dir, "cgroup.procs"), "w", encoding="utf-8") as fh:
+                fh.write(str(os.getpid()))
+            with open(os.path.join(cg_dir, "cgroup.subtree_control"), "w", encoding="utf-8") as fh:
+                fh.write("+io")
+            self._base_dir = cg_dir
+        except OSError as exc:
+            logger.debug("cgroup v2 io.max controller unavailable: %s", exc)
+            self._base_dir = None
+        return self._base_dir
+
+    def attach_and_limit(
+        self, storeid: str, pid: int, block_devs: List[str], wbps: Optional[int]
+    ) -> None:
+        if not block_devs:
+            return
+        with self._lock:
+            base = self._ensure_init_locked()
+            if not base:
+                return
+            mount_cg = os.path.join(base, f"mount-{storeid}")
+            try:
+                os.makedirs(mount_cg, exist_ok=True)
+                with open(os.path.join(mount_cg, "cgroup.procs"), "w", encoding="utf-8") as fh:
+                    fh.write(str(pid))
+            except OSError as exc:
+                logger.debug("Failed to attach rclone pid %d to %s: %s", pid, mount_cg, exc)
+                return
+        self.set_write_limit(storeid, block_devs, wbps)
+
+    def set_write_limit(
+        self, storeid: str, block_devs: List[str], wbps: Optional[int]
+    ) -> None:
+        if not block_devs:
+            return
+        with self._lock:
+            base = self._ensure_init_locked()
+            if not base:
+                return
+            io_max = os.path.join(base, f"mount-{storeid}", "io.max")
+            if not os.path.isfile(io_max):
+                return
+            limit_val = str(int(wbps)) if wbps and wbps > 0 else "max"
+            for dev in block_devs:
+                try:
+                    with open(io_max, "w", encoding="utf-8") as fh:
+                        fh.write(f"{dev} wbps={limit_val}\n")
+                except OSError as exc:
+                    logger.debug("Failed to set io.max on %s (%s): %s", io_max, dev, exc)
+
+    def cleanup(self, storeid: str) -> None:
+        with self._lock:
+            if not self._base_dir:
+                return
+            mount_cg = os.path.join(self._base_dir, f"mount-{storeid}")
+            try:
+                if os.path.isdir(mount_cg):
+                    os.rmdir(mount_cg)
+            except OSError:
+                pass
+
+
 class _ManagedMount:
     """Tracks a supervised rclone mount subprocess."""
 
-    def __init__(self, storeid: str, cmd: List[str], rc_sock: str, mount_point: str, cache_dir: str, cache_max: int) -> None:
+    def __init__(
+        self,
+        storeid: str,
+        cmd: List[str],
+        rc_sock: str,
+        mount_point: str,
+        cache_dir: str,
+        cache_max: int,
+        write_bwlimit_bytes: Optional[int] = None,
+        block_devs: Optional[List[str]] = None,
+    ) -> None:
         self.storeid = storeid
         self.cmd = cmd
         self.rc_sock = rc_sock
         self.mount_point = mount_point
         self.cache_dir = cache_dir
         self.cache_max = cache_max
+        self.write_bwlimit_bytes = write_bwlimit_bytes
+        self.block_devs = list(block_devs or [])
+        self.backpressure_active = False
         self.process: Optional[subprocess.Popen[bytes]] = None
         self.active = True
         self.started_at = time.time()
@@ -280,6 +466,7 @@ class VFSSupervisor:
         self._stop_event = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
         self._rc_queue_supported: Optional[bool] = None
+        self._cgroup_io = _CgroupIOController()
 
     def _storage_meta_path(self, storeid: str) -> str:
         safe = validate_store_id(storeid)
@@ -321,6 +508,7 @@ class VFSSupervisor:
         root_folder_id: Optional[str] = None,
         cache_dir: Optional[str] = None,
         cache_max_size: Optional[str] = None,
+        write_bwlimit: Optional[str] = None,
         encrypt: bool = False,
         async_upload: bool = False,
         crypt_password: Optional[str] = None,
@@ -362,6 +550,7 @@ class VFSSupervisor:
             "folders": layout["folders"],
             "cache_dir": (cache_dir or self.config.cache_dir).strip(),
             "cache_max_size": (cache_max_size or "").strip(),
+            "write_bwlimit": (write_bwlimit or "").strip(),
             "encrypt": bool(encrypt),
             "async_upload": bool(async_upload),
             "updated_at": int(time.time()),
@@ -525,7 +714,9 @@ class VFSSupervisor:
             "--vfs-cache-max-size",
             cap_rclone,
             "--vfs-cache-max-age",
-            "1h",
+            "10m",
+            "--vfs-cache-poll-interval",
+            "15s",
             "--dir-cache-time",
             "30m",
             "--vfs-fast-fingerprint",
@@ -547,6 +738,54 @@ class VFSSupervisor:
         )
         self._monitor_thread.start()
 
+    def _check_cache_backpressure(self, storeid: str, managed: _ManagedMount) -> None:
+        """Throttle rclone cache disk writes via cgroup io.max if cache nears cap or disk fills."""
+        if not managed.block_devs:
+            return
+        try:
+            st = os.statvfs(_existing_stat_path(managed.cache_dir))
+            free_bytes = int(st.f_frsize * st.f_bavail)
+        except OSError:
+            return
+
+        cache_used = _dir_size_bytes(managed.cache_dir)
+        high_water = (
+            (managed.cache_max > 0 and cache_used >= int(managed.cache_max * 0.90))
+            or free_bytes < _MIN_FREE_BYTES
+        )
+        low_water = (
+            (managed.cache_max <= 0 or cache_used < int(managed.cache_max * 0.75))
+            and free_bytes >= 2 * _MIN_FREE_BYTES
+        )
+
+        if high_water and not managed.backpressure_active:
+            managed.backpressure_active = True
+            cap = (
+                min(managed.write_bwlimit_bytes, _BACKPRESSURE_WBPS)
+                if managed.write_bwlimit_bytes
+                else _BACKPRESSURE_WBPS
+            )
+            logger.warning(
+                "Cache pressure on %s (used=%d, max=%d, free=%d); throttling write I/O to %d B/s",
+                storeid,
+                cache_used,
+                managed.cache_max,
+                free_bytes,
+                cap,
+            )
+            self._cgroup_io.set_write_limit(storeid, managed.block_devs, cap)
+        elif low_water and managed.backpressure_active:
+            managed.backpressure_active = False
+            logger.info(
+                "Cache pressure cleared on %s (used=%d, free=%d); restoring write limit",
+                storeid,
+                cache_used,
+                free_bytes,
+            )
+            self._cgroup_io.set_write_limit(
+                storeid, managed.block_devs, managed.write_bwlimit_bytes
+            )
+
     def _monitor_loop(self) -> None:
         while not self._stop_event.wait(2.0):
             with self._lock:
@@ -567,8 +806,18 @@ class VFSSupervisor:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE,
                         )
+                        effective_wbps = (
+                            min(managed.write_bwlimit_bytes, _BACKPRESSURE_WBPS)
+                            if managed.backpressure_active and managed.write_bwlimit_bytes
+                            else (_BACKPRESSURE_WBPS if managed.backpressure_active else managed.write_bwlimit_bytes)
+                        )
+                        self._cgroup_io.attach_and_limit(
+                            storeid, managed.process.pid, managed.block_devs, effective_wbps
+                        )
                     except Exception as exc:
                         managed.last_error = str(exc)
+                else:
+                    self._check_cache_backpressure(storeid, managed)
 
     def activate_storage(
         self,
@@ -579,6 +828,7 @@ class VFSSupervisor:
         root_folder_id: Optional[str] = None,
         cache_dir: Optional[str] = None,
         cache_max_size: Optional[str] = None,
+        write_bwlimit: Optional[str] = None,
         encrypt: Optional[bool] = None,
         async_upload: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -598,6 +848,7 @@ class VFSSupervisor:
                 root_folder_id=root_folder_id,
                 cache_dir=cache_dir,
                 cache_max_size=cache_max_size,
+                write_bwlimit=write_bwlimit,
                 encrypt=bool(encrypt),
                 async_upload=bool(async_upload),
             )
@@ -612,6 +863,7 @@ class VFSSupervisor:
             ("root_folder_id", root_folder_id),
             ("cache_dir", cache_dir),
             ("cache_max_size", cache_max_size),
+            ("write_bwlimit", write_bwlimit),
         ):
             if val is not None and val != meta.get(key):
                 meta[key] = val
@@ -624,14 +876,23 @@ class VFSSupervisor:
             ensure_dir(self.config.storages_dir, mode=0o700)
             atomic_write_json(self._storage_meta_path(safe_storeid), meta, mode=0o600)
 
+        write_bwlimit_bytes = parse_write_bwlimit(meta.get("write_bwlimit"))
+
         with self._lock:
             existing = self._mounts.get(safe_storeid)
             if existing and existing.active and existing.process and existing.process.poll() is None:
+                if existing.write_bwlimit_bytes != write_bwlimit_bytes:
+                    existing.write_bwlimit_bytes = write_bwlimit_bytes
+                    if not existing.backpressure_active:
+                        self._cgroup_io.set_write_limit(
+                            safe_storeid, existing.block_devs, write_bwlimit_bytes
+                        )
                 return {
                     "ok": True,
                     "storeid": safe_storeid,
                     "mount_point": existing.mount_point,
                     "cache_max": existing.cache_max,
+                    "write_bwlimit_bytes": write_bwlimit_bytes or 0,
                     "active": True,
                 }
 
@@ -703,6 +964,7 @@ class VFSSupervisor:
                 break
             time.sleep(0.05)
 
+        block_devs = _resolve_block_devices(storage_cache_dir)
         managed = _ManagedMount(
             storeid=safe_storeid,
             cmd=cmd,
@@ -710,8 +972,13 @@ class VFSSupervisor:
             mount_point=mount_point,
             cache_dir=storage_cache_dir,
             cache_max=cap_info["cap_bytes"],
+            write_bwlimit_bytes=write_bwlimit_bytes,
+            block_devs=block_devs,
         )
         managed.process = proc
+        self._cgroup_io.attach_and_limit(
+            safe_storeid, proc.pid, block_devs, write_bwlimit_bytes
+        )
 
         with self._lock:
             self._mounts[safe_storeid] = managed
@@ -723,6 +990,7 @@ class VFSSupervisor:
             "mount_point": mount_point,
             "cache_max": cap_info["cap_bytes"],
             "cache_max_rclone": cap_info["cap_rclone"],
+            "write_bwlimit_bytes": write_bwlimit_bytes or 0,
             "active": True,
         }
 
@@ -760,6 +1028,8 @@ class VFSSupervisor:
                     res = subprocess.run(unmount_cmd, capture_output=True, check=False)
                     if res.returncode == 0:
                         break
+
+        self._cgroup_io.cleanup(safe_storeid)
 
         for path in (
             self._rclone_conf_path(safe_storeid),

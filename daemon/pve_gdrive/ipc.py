@@ -245,6 +245,7 @@ class IPCRequestHandler(BaseHTTPRequestHandler):
                 root_folder_id=body.get("root_folder_id"),
                 cache_dir=body.get("cache_dir"),
                 cache_max_size=body.get("cache_max_size"),
+                write_bwlimit=body.get("write_bwlimit"),
                 encrypt=bool(body.get("encrypt", False)),
                 async_upload=bool(body.get("async_upload", False)),
                 crypt_password=body.get("crypt_password"),
@@ -263,6 +264,7 @@ class IPCRequestHandler(BaseHTTPRequestHandler):
                 root_folder_id=body.get("root_folder_id"),
                 cache_dir=body.get("cache_dir"),
                 cache_max_size=body.get("cache_max_size"),
+                write_bwlimit=body.get("write_bwlimit"),
                 encrypt=body.get("encrypt"),
                 async_upload=body.get("async_upload"),
             )
